@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added automatic Portable Git Bash downloads on Windows when no bash shell is installed.
+
 ### Fixed
 
 - Fixed npm-family package commands on Windows to avoid shell argument splitting when install prefixes contain spaces ([#4623](https://github.com/earendil-works/pi/issues/4623)).

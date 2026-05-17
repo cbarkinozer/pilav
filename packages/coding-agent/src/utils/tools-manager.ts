@@ -1,13 +1,26 @@
 import chalk from "chalk";
 import { type SpawnSyncReturns, spawnSync } from "child_process";
-import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "fs";
+import { createHash } from "crypto";
+import {
+	chmodSync,
+	createReadStream,
+	createWriteStream,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	renameSync,
+	rmSync,
+} from "fs";
 import { arch, platform } from "os";
 import { join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
+import type { ReadableStream as NodeReadableStream } from "stream/web";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
+const PORTABLE_GIT_DIR = join(TOOLS_DIR, "portable-git");
+const GIT_FOR_WINDOWS_REPO = "git-for-windows/git";
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -15,6 +28,17 @@ function isOfflineModeEnabled(): boolean {
 	const value = process.env.PI_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+interface GitHubReleaseAsset {
+	name: string;
+	browser_download_url: string;
+	digest?: string;
+}
+
+interface GitHubRelease {
+	tag_name: string;
+	assets: GitHubReleaseAsset[];
 }
 
 interface ToolConfig {
@@ -103,8 +127,8 @@ export function getToolPath(tool: "fd" | "rg"): string | null {
 	return null;
 }
 
-// Fetch latest release version from GitHub
-async function getLatestVersion(repo: string): Promise<string> {
+// Fetch latest release metadata from GitHub
+async function getLatestRelease(repo: string): Promise<GitHubRelease> {
 	const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
 		headers: { "User-Agent": `${APP_NAME}-coding-agent` },
 		signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
@@ -114,7 +138,16 @@ async function getLatestVersion(repo: string): Promise<string> {
 		throw new Error(`GitHub API error: ${response.status}`);
 	}
 
-	const data = (await response.json()) as { tag_name: string };
+	const data = (await response.json()) as { tag_name?: string; assets?: GitHubReleaseAsset[] };
+	if (!data.tag_name) {
+		throw new Error("GitHub API response did not include a release tag");
+	}
+	return { tag_name: data.tag_name, assets: data.assets ?? [] };
+}
+
+// Fetch latest release version from GitHub
+async function getLatestVersion(repo: string): Promise<string> {
+	const data = await getLatestRelease(repo);
 	return data.tag_name.replace(/^v/, "");
 }
 
@@ -133,7 +166,28 @@ async function downloadFile(url: string, dest: string): Promise<void> {
 	}
 
 	const fileStream = createWriteStream(dest);
-	await pipeline(Readable.fromWeb(response.body as any), fileStream);
+	await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), fileStream);
+}
+
+async function calculateFileSha256(filePath: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const hash = createHash("sha256");
+		const stream = createReadStream(filePath);
+		stream.on("data", (chunk) => hash.update(chunk));
+		stream.on("error", reject);
+		stream.on("end", () => resolve(hash.digest("hex")));
+	});
+}
+
+async function verifyGitHubAssetDigest(filePath: string, digest: string | undefined, assetName: string): Promise<void> {
+	if (!digest) return;
+	const [algorithm, expectedHash] = digest.split(":", 2);
+	if (algorithm !== "sha256" || !expectedHash) return;
+
+	const actualHash = await calculateFileSha256(filePath);
+	if (actualHash.toLowerCase() !== expectedHash.toLowerCase()) {
+		throw new Error(`Checksum mismatch for ${assetName}`);
+	}
 }
 
 function findBinaryRecursively(rootDir: string, binaryFileName: string): string | null {
@@ -174,7 +228,7 @@ function formatSpawnFailure(result: SpawnSyncReturns<Buffer>): string {
 }
 
 function runExtractionCommand(command: string, args: string[]): string | null {
-	const result = spawnSync(command, args, { stdio: "pipe" });
+	const result = spawnSync(command, args, { stdio: "pipe", windowsHide: true });
 	if (!result.error && result.status === 0) {
 		return null;
 	}
@@ -235,6 +289,134 @@ function extractZipArchive(archivePath: string, extractDir: string, assetName: s
 	}
 
 	throw new Error(`Failed to extract ${assetName}: ${failures.join("; ")}`);
+}
+
+function getPortableGitBashCandidates(rootDir: string): string[] {
+	return [join(rootDir, "bin", "bash.exe"), join(rootDir, "usr", "bin", "bash.exe")];
+}
+
+export function getManagedWindowsPortableGitBashCandidates(): string[] {
+	return getPortableGitBashCandidates(PORTABLE_GIT_DIR);
+}
+
+function getPortableGitBashPath(rootDir: string): string | null {
+	return getPortableGitBashCandidates(rootDir).find((candidate) => existsSync(candidate)) ?? null;
+}
+
+export function getManagedWindowsPortableGitBashPath(): string | null {
+	if (platform() !== "win32") return null;
+	return getPortableGitBashPath(PORTABLE_GIT_DIR);
+}
+
+function selectPortableGitAsset(release: GitHubRelease, architecture: string): GitHubReleaseAsset {
+	let suffix: string;
+	switch (architecture) {
+		case "x64":
+			suffix = "-64-bit.7z.exe";
+			break;
+		case "arm64":
+			suffix = "-arm64.7z.exe";
+			break;
+		default:
+			throw new Error(`Unsupported Windows architecture: ${architecture}`);
+	}
+
+	const asset = release.assets.find((asset) => asset.name.startsWith("PortableGit-") && asset.name.endsWith(suffix));
+	if (!asset) {
+		throw new Error(`Portable Git release asset not found for ${architecture}`);
+	}
+	return asset;
+}
+
+function validatePortableGitBash(bashPath: string): void {
+	const result = spawnSync(bashPath, ["--version"], { stdio: "pipe" });
+	if (result.error || result.status !== 0) {
+		throw new Error(`Portable Git bash validation failed: ${formatSpawnFailure(result)}`);
+	}
+}
+
+async function downloadPortableGitBash(): Promise<string> {
+	if (platform() !== "win32") {
+		throw new Error("Portable Git Bash is only available on Windows");
+	}
+
+	const release = await getLatestRelease(GIT_FOR_WINDOWS_REPO);
+	const asset = selectPortableGitAsset(release, arch());
+
+	mkdirSync(TOOLS_DIR, { recursive: true });
+	const stagingRoot = join(
+		TOOLS_DIR,
+		`portable_git_tmp_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+	);
+	const extractDir = join(stagingRoot, "extract");
+	const installerPath = join(stagingRoot, asset.name);
+	mkdirSync(extractDir, { recursive: true });
+
+	try {
+		await downloadFile(asset.browser_download_url, installerPath);
+		await verifyGitHubAssetDigest(installerPath, asset.digest, asset.name);
+
+		const failure = runExtractionCommand(installerPath, ["-y", `-o${extractDir}`]);
+		if (failure) {
+			throw new Error(`Failed to extract ${asset.name}: ${failure}`);
+		}
+
+		const extractedBash = getPortableGitBashPath(extractDir);
+		if (!extractedBash) {
+			throw new Error(`Portable Git Bash not found in ${asset.name}`);
+		}
+		validatePortableGitBash(extractedBash);
+
+		const existingPath = getManagedWindowsPortableGitBashPath();
+		if (existingPath) {
+			return existingPath;
+		}
+
+		if (existsSync(PORTABLE_GIT_DIR)) {
+			rmSync(PORTABLE_GIT_DIR, { recursive: true, force: true });
+		}
+		renameSync(extractDir, PORTABLE_GIT_DIR);
+
+		const installedBash = getManagedWindowsPortableGitBashPath();
+		if (!installedBash) {
+			throw new Error(`Portable Git Bash install did not create ${getManagedWindowsPortableGitBashCandidates()[0]}`);
+		}
+		validatePortableGitBash(installedBash);
+		return installedBash;
+	} finally {
+		rmSync(stagingRoot, { recursive: true, force: true });
+	}
+}
+
+export async function ensureWindowsPortableGitBash(silent: boolean = false): Promise<string | undefined> {
+	if (platform() !== "win32") return undefined;
+
+	const existingPath = getManagedWindowsPortableGitBashPath();
+	if (existingPath) return existingPath;
+
+	if (isOfflineModeEnabled()) {
+		if (!silent) {
+			console.log(chalk.yellow("bash not found. Offline mode enabled, skipping Portable Git download."));
+		}
+		return undefined;
+	}
+
+	if (!silent) {
+		console.log(chalk.dim("bash not found. Downloading Portable Git..."));
+	}
+
+	try {
+		const path = await downloadPortableGitBash();
+		if (!silent) {
+			console.log(chalk.dim(`Portable Git Bash installed to ${path}`));
+		}
+		return path;
+	} catch (e) {
+		if (!silent) {
+			console.log(chalk.yellow(`Failed to download Portable Git Bash: ${e instanceof Error ? e.message : e}`));
+		}
+		return undefined;
+	}
 }
 
 // Download and install a tool

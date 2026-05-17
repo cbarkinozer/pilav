@@ -89,7 +89,7 @@ import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipb
 import { parseGitUrl } from "../../utils/git.js";
 import { getCwdRelativePath } from "../../utils/paths.js";
 import { getPiUserAgent } from "../../utils/pi-user-agent.js";
-import { killTrackedDetachedChildren } from "../../utils/shell.js";
+import { ensureWindowsBash, killTrackedDetachedChildren } from "../../utils/shell.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { checkForNewPiVersion } from "../../utils/version-check.js";
 import { ArminComponent } from "./components/armin.js";
@@ -567,9 +567,13 @@ export class InteractiveMode {
 		// Load changelog (only show new entries, skip for resumed sessions)
 		this.changelogMarkdown = this.getChangelogForDisplay();
 
-		// Ensure fd and rg are available (downloads if missing, adds to PATH via getBinDir)
-		// Both are needed: fd for autocomplete, rg for grep tool and bash commands
-		const [fdPath] = await Promise.all([ensureTool("fd"), ensureTool("rg")]);
+		// Ensure fd, rg, and Windows bash are available, downloading missing tools under getBinDir.
+		// fd is needed for autocomplete, rg for grep and bash commands, bash for shell execution on Windows.
+		const [fdPath] = await Promise.all([
+			ensureTool("fd"),
+			ensureTool("rg"),
+			ensureWindowsBash(this.settingsManager.getShellPath()),
+		]);
 		this.fdPath = fdPath;
 
 		if (this.session.scopedModels.length > 0 && (this.options.verbose || !this.settingsManager.getQuietStartup())) {

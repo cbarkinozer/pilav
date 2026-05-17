@@ -2,10 +2,21 @@ import { existsSync } from "node:fs";
 import { delimiter } from "node:path";
 import { spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.js";
+import {
+	ensureWindowsPortableGitBash,
+	getManagedWindowsPortableGitBashCandidates,
+	getManagedWindowsPortableGitBashPath,
+} from "./tools-manager.js";
 
 export interface ShellConfig {
 	shell: string;
 	args: string[];
+}
+
+function isSystemBashLookupDisabled(): boolean {
+	const value = process.env.__PI_DISABLE_SYSTEM_BASH_LOOKUP;
+	if (!value) return false;
+	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
 /**
@@ -47,7 +58,7 @@ function findBashOnPath(): string | null {
  * Resolve shell configuration based on platform and an optional explicit shell path.
  * Resolution order:
  * 1. User-specified shellPath
- * 2. On Windows: Git Bash in known locations, then bash on PATH
+ * 2. On Windows: Git Bash in known locations, managed Portable Git Bash, then bash on PATH
  * 3. On Unix: /bin/bash, then bash on PATH, then fallback to sh
  */
 export function getShellConfig(customShellPath?: string): ShellConfig {
@@ -60,35 +71,51 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 	}
 
 	if (process.platform === "win32") {
+		const skipSystemBashLookup = isSystemBashLookupDisabled();
+
 		// 2. Try Git Bash in known locations
 		const paths: string[] = [];
-		const programFiles = process.env.ProgramFiles;
-		if (programFiles) {
-			paths.push(`${programFiles}\\Git\\bin\\bash.exe`);
-		}
-		const programFilesX86 = process.env["ProgramFiles(x86)"];
-		if (programFilesX86) {
-			paths.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
-		}
+		if (!skipSystemBashLookup) {
+			const programFiles = process.env.ProgramFiles;
+			if (programFiles) {
+				paths.push(`${programFiles}\\Git\\bin\\bash.exe`);
+			}
+			const programFilesX86 = process.env["ProgramFiles(x86)"];
+			if (programFilesX86) {
+				paths.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
+			}
 
-		for (const path of paths) {
-			if (existsSync(path)) {
-				return { shell: path, args: ["-c"] };
+			for (const path of paths) {
+				if (existsSync(path)) {
+					return { shell: path, args: ["-c"] };
+				}
 			}
 		}
 
+		const managedPortableGitBash = getManagedWindowsPortableGitBashPath();
+		if (managedPortableGitBash) {
+			return { shell: managedPortableGitBash, args: ["-c"] };
+		}
+
 		// 3. Fallback: search bash.exe on PATH (Cygwin, MSYS2, WSL, etc.)
-		const bashOnPath = findBashOnPath();
-		if (bashOnPath) {
-			return { shell: bashOnPath, args: ["-c"] };
+		if (!skipSystemBashLookup) {
+			const bashOnPath = findBashOnPath();
+			if (bashOnPath) {
+				return { shell: bashOnPath, args: ["-c"] };
+			}
 		}
 
 		throw new Error(
 			`No bash shell found. Options:\n` +
 				`  1. Install Git for Windows: https://git-scm.com/download/win\n` +
-				`  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
-				"  3. Set shellPath in settings.json\n\n" +
-				`Searched Git Bash in:\n${paths.map((p) => `  ${p}`).join("\n")}`,
+				`  2. Let pi download Portable Git Bash automatically\n` +
+				`  3. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
+				"  4. Set shellPath in settings.json\n\n" +
+				(skipSystemBashLookup ? "System bash lookup disabled by __PI_DISABLE_SYSTEM_BASH_LOOKUP.\n" : "") +
+				`Searched Git Bash in:\n${paths.map((p) => `  ${p}`).join("\n")}\n` +
+				`Searched managed Portable Git Bash in:\n${getManagedWindowsPortableGitBashCandidates()
+					.map((p) => `  ${p}`)
+					.join("\n")}`,
 		);
 	}
 
@@ -103,6 +130,38 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 	}
 
 	return { shell: "sh", args: ["-c"] };
+}
+
+export async function ensureShellConfig(
+	customShellPath?: string,
+	options: { silent?: boolean } = {},
+): Promise<ShellConfig> {
+	try {
+		return getShellConfig(customShellPath);
+	} catch (error) {
+		if (customShellPath || process.platform !== "win32") {
+			throw error;
+		}
+
+		const installedBash = await ensureWindowsPortableGitBash(options.silent ?? false);
+		if (installedBash) {
+			return { shell: installedBash, args: ["-c"] };
+		}
+		throw error;
+	}
+}
+
+export async function ensureWindowsBash(
+	customShellPath?: string,
+	silent: boolean = false,
+): Promise<string | undefined> {
+	if (process.platform !== "win32") return undefined;
+	try {
+		const { shell } = await ensureShellConfig(customShellPath, { silent });
+		return shell;
+	} catch {
+		return undefined;
+	}
 }
 
 export function getShellEnv(): NodeJS.ProcessEnv {

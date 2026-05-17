@@ -8,7 +8,7 @@ import { truncateToVisualLines } from "../../modes/interactive/components/visual
 import { theme } from "../../modes/interactive/theme/theme.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
 import {
-	getShellConfig,
+	ensureShellConfig,
 	getShellEnv,
 	killProcessTree,
 	trackDetachedChildPid,
@@ -64,13 +64,13 @@ export interface BashOperations {
  */
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
 	return {
-		exec: (command, cwd, { onData, signal, timeout, env }) => {
+		exec: async (command, cwd, { onData, signal, timeout, env }) => {
+			if (!existsSync(cwd)) {
+				throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
+			}
+			const { shell, args } = await ensureShellConfig(options?.shellPath, { silent: true });
+
 			return new Promise((resolve, reject) => {
-				const { shell, args } = getShellConfig(options?.shellPath);
-				if (!existsSync(cwd)) {
-					reject(new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`));
-					return;
-				}
 				const child = spawn(shell, [...args, command], {
 					cwd,
 					detached: process.platform !== "win32",
