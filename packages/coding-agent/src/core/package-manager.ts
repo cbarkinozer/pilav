@@ -822,7 +822,6 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	getInstalledPath(source: string, scope: "user" | "project"): string | undefined {
-		this.assertProjectPiTrustedForScope(scope);
 		const parsed = this.parseSource(source);
 		if (parsed.type === "npm") {
 			const path = this.getNpmInstallPath(parsed, scope);
@@ -1293,7 +1292,6 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async installParsedSource(parsed: ParsedSource, scope: SourceScope): Promise<void> {
-		this.assertProjectPiTrustedForScope(scope);
 		if (parsed.type === "npm") {
 			await this.installNpm(parsed, scope, scope === "temporary");
 			return;

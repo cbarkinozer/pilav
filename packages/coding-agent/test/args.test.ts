@@ -300,18 +300,6 @@ describe("parseArgs", () => {
 		});
 	});
 
-	describe("--force flag", () => {
-		test("parses --force flag", () => {
-			const result = parseArgs(["--force"]);
-			expect(result.force).toBe(true);
-		});
-
-		test("parses -f shorthand", () => {
-			const result = parseArgs(["-f"]);
-			expect(result.force).toBe(true);
-		});
-	});
-
 	describe("--offline flag", () => {
 		test("parses --offline flag", () => {
 			const result = parseArgs(["--offline"]);

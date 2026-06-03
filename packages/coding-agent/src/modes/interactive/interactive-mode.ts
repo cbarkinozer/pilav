@@ -4947,9 +4947,10 @@ export class InteractiveMode {
 		return "ask";
 	}
 
-	private async selectTrustDecision(): Promise<ProjectTrustDecision | undefined> {
-		const trustStore = new ProjectTrustStore(getAgentDir());
-		const cwd = this.sessionManager.getCwd();
+	private async selectTrustDecision(
+		trustStore: ProjectTrustStore,
+		cwd: string,
+	): Promise<ProjectTrustDecision | undefined> {
 		const current = this.formatTrustDecision(trustStore.get(cwd));
 		const choice = await this.showExtensionSelector(
 			`Trust project .pi directory?\nCurrent setting: ${current}\nLoad .pi from ${cwd}?\nWarning: Project extensions can execute code.`,
@@ -4977,10 +4978,12 @@ export class InteractiveMode {
 			return;
 		}
 
+		const trustStore = new ProjectTrustStore(getAgentDir());
+		const cwd = this.sessionManager.getCwd();
 		const rawArg = text === "/trust" ? "" : text.slice("/trust".length).trim().toLowerCase();
 		let decision: ProjectTrustDecision | undefined;
 		if (!rawArg) {
-			decision = await this.selectTrustDecision();
+			decision = await this.selectTrustDecision(trustStore, cwd);
 		} else if (rawArg === "yes") {
 			decision = true;
 		} else if (rawArg === "no") {
@@ -4996,8 +4999,6 @@ export class InteractiveMode {
 			return;
 		}
 
-		const trustStore = new ProjectTrustStore(getAgentDir());
-		const cwd = this.sessionManager.getCwd();
 		trustStore.set(cwd, decision);
 		const projectPiTrusted = this.options.forceProjectPiTrust === true || decision === true;
 		this.settingsManager.setProjectConfigTrusted(projectPiTrusted);

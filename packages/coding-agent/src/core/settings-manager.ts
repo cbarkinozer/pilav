@@ -165,8 +165,6 @@ export interface SettingsManagerCreateOptions {
 
 export interface SettingsStorage {
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
-	setProjectConfigTrusted?(trusted: boolean): void;
-	isProjectConfigTrusted?(): boolean;
 }
 
 export interface SettingsError {
@@ -177,22 +175,12 @@ export interface SettingsError {
 export class FileSettingsStorage implements SettingsStorage {
 	private globalSettingsPath: string;
 	private projectSettingsPath: string;
-	private projectConfigTrusted: boolean;
 
-	constructor(cwd: string, agentDir: string, options: SettingsManagerCreateOptions = {}) {
+	constructor(cwd: string, agentDir: string) {
 		const resolvedCwd = resolvePath(cwd);
 		const resolvedAgentDir = resolvePath(agentDir);
 		this.globalSettingsPath = join(resolvedAgentDir, "settings.json");
 		this.projectSettingsPath = join(resolvedCwd, CONFIG_DIR_NAME, "settings.json");
-		this.projectConfigTrusted = options.projectConfigTrusted ?? true;
-	}
-
-	setProjectConfigTrusted(trusted: boolean): void {
-		this.projectConfigTrusted = trusted;
-	}
-
-	isProjectConfigTrusted(): boolean {
-		return this.projectConfigTrusted;
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
@@ -223,10 +211,6 @@ export class FileSettingsStorage implements SettingsStorage {
 	}
 
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-		if (scope === "project" && !this.projectConfigTrusted) {
-			throw new Error("Project .pi is not trusted; refusing to access project settings");
-		}
-
 		const path = scope === "global" ? this.globalSettingsPath : this.projectSettingsPath;
 		const dir = dirname(path);
 
@@ -260,21 +244,8 @@ export class FileSettingsStorage implements SettingsStorage {
 export class InMemorySettingsStorage implements SettingsStorage {
 	private global: string | undefined;
 	private project: string | undefined;
-	private projectConfigTrusted = true;
-
-	setProjectConfigTrusted(trusted: boolean): void {
-		this.projectConfigTrusted = trusted;
-	}
-
-	isProjectConfigTrusted(): boolean {
-		return this.projectConfigTrusted;
-	}
 
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-		if (scope === "project" && !this.projectConfigTrusted) {
-			throw new Error("Project .pi is not trusted; refusing to access project settings");
-		}
-
 		const current = scope === "global" ? this.global : this.project;
 		const next = fn(current);
 		if (next !== undefined) {
@@ -327,15 +298,15 @@ export class SettingsManager {
 		agentDir: string = getAgentDir(),
 		options: SettingsManagerCreateOptions = {},
 	): SettingsManager {
-		const storage = new FileSettingsStorage(cwd, agentDir, options);
-		return SettingsManager.fromStorage(storage);
+		const storage = new FileSettingsStorage(cwd, agentDir);
+		return SettingsManager.fromStorage(storage, options);
 	}
 
 	/** Create a SettingsManager from an arbitrary storage backend */
-	static fromStorage(storage: SettingsStorage): SettingsManager {
-		const projectConfigTrusted = storage.isProjectConfigTrusted?.() ?? true;
+	static fromStorage(storage: SettingsStorage, options: SettingsManagerCreateOptions = {}): SettingsManager {
+		const projectConfigTrusted = options.projectConfigTrusted ?? true;
 		const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
-		const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project");
+		const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project", projectConfigTrusted);
 		const initialErrors: SettingsError[] = [];
 		if (globalLoad.error) {
 			initialErrors.push({ scope: "global", error: globalLoad.error });
@@ -363,8 +334,12 @@ export class SettingsManager {
 		return SettingsManager.fromStorage(storage);
 	}
 
-	private static loadFromStorage(storage: SettingsStorage, scope: SettingsScope): Settings {
-		if (scope === "project" && storage.isProjectConfigTrusted?.() === false) {
+	private static loadFromStorage(
+		storage: SettingsStorage,
+		scope: SettingsScope,
+		projectConfigTrusted = true,
+	): Settings {
+		if (scope === "project" && !projectConfigTrusted) {
 			return {};
 		}
 
@@ -384,9 +359,10 @@ export class SettingsManager {
 	private static tryLoadFromStorage(
 		storage: SettingsStorage,
 		scope: SettingsScope,
+		projectConfigTrusted = true,
 	): { settings: Settings; error: Error | null } {
 		try {
-			return { settings: SettingsManager.loadFromStorage(storage, scope), error: null };
+			return { settings: SettingsManager.loadFromStorage(storage, scope, projectConfigTrusted), error: null };
 		} catch (error) {
 			return { settings: {}, error: error as Error };
 		}
@@ -468,7 +444,6 @@ export class SettingsManager {
 
 	setProjectConfigTrusted(trusted: boolean): void {
 		this.projectConfigTrusted = trusted;
-		this.storage.setProjectConfigTrusted?.(trusted);
 		if (!trusted) {
 			this.projectSettings = {};
 			this.projectSettingsLoadError = null;
@@ -494,7 +469,7 @@ export class SettingsManager {
 		this.modifiedProjectFields.clear();
 		this.modifiedProjectNestedFields.clear();
 
-		const projectLoad = SettingsManager.tryLoadFromStorage(this.storage, "project");
+		const projectLoad = SettingsManager.tryLoadFromStorage(this.storage, "project", this.projectConfigTrusted);
 		if (!projectLoad.error) {
 			this.projectSettings = projectLoad.settings;
 			this.projectSettingsLoadError = null;
@@ -558,6 +533,9 @@ export class SettingsManager {
 	private enqueueWrite(scope: SettingsScope, task: () => void): void {
 		this.writeQueue = this.writeQueue
 			.then(() => {
+				if (scope === "project") {
+					this.assertProjectConfigTrustedForWrite();
+				}
 				task();
 				this.clearModifiedScope(scope);
 			})
@@ -636,6 +614,14 @@ export class SettingsManager {
 		this.enqueueWrite("project", () => {
 			this.persistScopedSettings("project", snapshotProjectSettings, modifiedFields, modifiedNestedFields);
 		});
+	}
+
+	private updateProjectSettings(field: keyof Settings, update: (settings: Settings) => void): void {
+		this.assertProjectConfigTrustedForWrite();
+		const projectSettings = structuredClone(this.projectSettings);
+		update(projectSettings);
+		this.markProjectModified(field);
+		this.saveProjectSettings(projectSettings);
 	}
 
 	async flush(): Promise<void> {
@@ -908,11 +894,9 @@ export class SettingsManager {
 	}
 
 	setProjectPackages(packages: PackageSource[]): void {
-		this.assertProjectConfigTrustedForWrite();
-		const projectSettings = structuredClone(this.projectSettings);
-		projectSettings.packages = packages;
-		this.markProjectModified("packages");
-		this.saveProjectSettings(projectSettings);
+		this.updateProjectSettings("packages", (settings) => {
+			settings.packages = packages;
+		});
 	}
 
 	getExtensionPaths(): string[] {
@@ -926,11 +910,9 @@ export class SettingsManager {
 	}
 
 	setProjectExtensionPaths(paths: string[]): void {
-		this.assertProjectConfigTrustedForWrite();
-		const projectSettings = structuredClone(this.projectSettings);
-		projectSettings.extensions = paths;
-		this.markProjectModified("extensions");
-		this.saveProjectSettings(projectSettings);
+		this.updateProjectSettings("extensions", (settings) => {
+			settings.extensions = paths;
+		});
 	}
 
 	getSkillPaths(): string[] {
@@ -944,11 +926,9 @@ export class SettingsManager {
 	}
 
 	setProjectSkillPaths(paths: string[]): void {
-		this.assertProjectConfigTrustedForWrite();
-		const projectSettings = structuredClone(this.projectSettings);
-		projectSettings.skills = paths;
-		this.markProjectModified("skills");
-		this.saveProjectSettings(projectSettings);
+		this.updateProjectSettings("skills", (settings) => {
+			settings.skills = paths;
+		});
 	}
 
 	getPromptTemplatePaths(): string[] {
@@ -962,11 +942,9 @@ export class SettingsManager {
 	}
 
 	setProjectPromptTemplatePaths(paths: string[]): void {
-		this.assertProjectConfigTrustedForWrite();
-		const projectSettings = structuredClone(this.projectSettings);
-		projectSettings.prompts = paths;
-		this.markProjectModified("prompts");
-		this.saveProjectSettings(projectSettings);
+		this.updateProjectSettings("prompts", (settings) => {
+			settings.prompts = paths;
+		});
 	}
 
 	getThemePaths(): string[] {
@@ -980,11 +958,9 @@ export class SettingsManager {
 	}
 
 	setProjectThemePaths(paths: string[]): void {
-		this.assertProjectConfigTrustedForWrite();
-		const projectSettings = structuredClone(this.projectSettings);
-		projectSettings.themes = paths;
-		this.markProjectModified("themes");
-		this.saveProjectSettings(projectSettings);
+		this.updateProjectSettings("themes", (settings) => {
+			settings.themes = paths;
+		});
 	}
 
 	getEnableSkillCommands(): boolean {

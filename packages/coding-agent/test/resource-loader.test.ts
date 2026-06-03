@@ -329,19 +329,6 @@ Content`,
 			expect(loader.getSystemPrompt()).toBe("You are a helpful assistant.");
 		});
 
-		it("should skip .pi SYSTEM.md when project .pi is not trusted", async () => {
-			const piDir = join(cwd, ".pi");
-			mkdirSync(piDir, { recursive: true });
-			writeFileSync(join(piDir, "SYSTEM.md"), "Project system prompt.");
-			writeFileSync(join(agentDir, "SYSTEM.md"), "Global system prompt.");
-			const settingsManager = SettingsManager.create(cwd, agentDir, { projectConfigTrusted: false });
-
-			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
-			await loader.reload();
-
-			expect(loader.getSystemPrompt()).toBe("Global system prompt.");
-		});
-
 		it("should skip .pi resources when project .pi is not trusted", async () => {
 			const piDir = join(cwd, ".pi");
 			const extensionsDir = join(piDir, "extensions");
@@ -352,6 +339,8 @@ Content`,
 			mkdirSync(skillDir, { recursive: true });
 			mkdirSync(promptsDir, { recursive: true });
 			mkdirSync(themesDir, { recursive: true });
+			writeFileSync(join(piDir, "SYSTEM.md"), "Project system prompt.");
+			writeFileSync(join(agentDir, "SYSTEM.md"), "Global system prompt.");
 			writeFileSync(join(extensionsDir, "project.ts"), `throw new Error("should not load");`);
 			writeFileSync(
 				join(skillDir, "SKILL.md"),
@@ -372,6 +361,7 @@ Project skill content`,
 			const loader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
 			await loader.reload();
 
+			expect(loader.getSystemPrompt()).toBe("Global system prompt.");
 			expect(loader.getExtensions().extensions).toHaveLength(0);
 			expect(loader.getExtensions().errors).toEqual([]);
 			expect(loader.getSkills().skills.some((skill) => skill.name === "project-skill")).toBe(false);
