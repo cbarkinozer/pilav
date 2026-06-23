@@ -2,15 +2,16 @@
  * Simple text input component for extensions.
  */
 
-import { Container, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, type Focusable, getKeybindings, Input, Text, type TUI } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
+import { ExtensionDialogFrame, type ExtensionDialogMaxHeight } from "./extension-dialog-frame.ts";
 import { keyHint } from "./keybinding-hints.ts";
 
 export interface ExtensionInputOptions {
 	tui?: TUI;
 	timeout?: number;
+	maxHeight?: ExtensionDialogMaxHeight;
 }
 
 export class ExtensionInputComponent extends Container implements Focusable {
@@ -44,12 +45,7 @@ export class ExtensionInputComponent extends Container implements Focusable {
 		this.onCancelCallback = onCancel;
 		this.baseTitle = title;
 
-		this.addChild(new DynamicBorder());
-		this.addChild(new Spacer(1));
-
 		this.titleText = new Text(theme.fg("accent", title), 1, 0);
-		this.addChild(this.titleText);
-		this.addChild(new Spacer(1));
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
 			this.countdown = new CountdownTimer(
@@ -61,13 +57,18 @@ export class ExtensionInputComponent extends Container implements Focusable {
 		}
 
 		this.input = new Input();
-		this.addChild(this.input);
-		this.addChild(new Spacer(1));
-		this.addChild(
-			new Text(`${keyHint("tui.select.confirm", "submit")}  ${keyHint("tui.select.cancel", "cancel")}`, 1, 0),
+		const hint = new Text(
+			`${keyHint("tui.select.confirm", "submit")}  ${keyHint("tui.select.cancel", "cancel")}`,
+			1,
+			0,
 		);
-		this.addChild(new Spacer(1));
-		this.addChild(new DynamicBorder());
+		this.addChild(
+			new ExtensionDialogFrame(this.titleText, this.input, hint, {
+				maxHeight: opts?.maxHeight,
+				clippedTitleText: "[increase terminal height to see full input text]",
+				renderBody: (width, maxRows) => this.input.render(width).slice(0, maxRows),
+			}),
+		);
 	}
 
 	handleInput(keyData: string): void {

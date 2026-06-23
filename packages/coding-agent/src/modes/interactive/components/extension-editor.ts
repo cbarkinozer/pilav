@@ -13,14 +13,17 @@ import {
 	type EditorOptions,
 	type Focusable,
 	getKeybindings,
-	Spacer,
 	Text,
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "../../../core/keybindings.ts";
 import { getEditorTheme, theme } from "../theme/theme.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
+import { ExtensionDialogFrame, type ExtensionDialogMaxHeight } from "./extension-dialog-frame.ts";
 import { keyHint } from "./keybinding-hints.ts";
+
+export interface ExtensionEditorOptions extends EditorOptions {
+	maxHeight?: ExtensionDialogMaxHeight;
+}
 
 export class ExtensionEditorComponent extends Container implements Focusable {
 	private editor: Editor;
@@ -45,7 +48,7 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 		prefill: string | undefined,
 		onSubmit: (value: string) => void,
 		onCancel: () => void,
-		options?: EditorOptions,
+		options?: ExtensionEditorOptions,
 	) {
 		super();
 
@@ -53,17 +56,10 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 		this.keybindings = keybindings;
 		this.onSubmitCallback = onSubmit;
 		this.onCancelCallback = onCancel;
+		const { maxHeight, ...editorOptions } = options ?? {};
 
-		// Add top border
-		this.addChild(new DynamicBorder());
-		this.addChild(new Spacer(1));
-
-		// Add title
-		this.addChild(new Text(theme.fg("accent", title), 1, 0));
-		this.addChild(new Spacer(1));
-
-		// Create editor
-		this.editor = new Editor(tui, getEditorTheme(), options);
+		const titleText = new Text(theme.fg("accent", title), 1, 0);
+		this.editor = new Editor(tui, getEditorTheme(), editorOptions);
 		if (prefill) {
 			this.editor.setText(prefill);
 		}
@@ -71,11 +67,7 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 		this.editor.onSubmit = (text: string) => {
 			this.onSubmitCallback(text);
 		};
-		this.addChild(this.editor);
 
-		this.addChild(new Spacer(1));
-
-		// Add hint
 		const hasExternalEditor = !!(process.env.VISUAL || process.env.EDITOR);
 		const hint =
 			keyHint("tui.select.confirm", "submit") +
@@ -84,12 +76,13 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 			"  " +
 			keyHint("tui.select.cancel", "cancel") +
 			(hasExternalEditor ? `  ${keyHint("app.editor.external", "external editor")}` : "");
-		this.addChild(new Text(hint, 1, 0));
-
-		this.addChild(new Spacer(1));
-
-		// Add bottom border
-		this.addChild(new DynamicBorder());
+		this.addChild(
+			new ExtensionDialogFrame(titleText, this.editor, new Text(hint, 1, 0), {
+				maxHeight,
+				clippedTitleText: "[increase terminal height to see full editor title]",
+				renderBody: (width, maxRows) => this.editor.render(width).slice(0, maxRows),
+			}),
+		);
 	}
 
 	handleInput(keyData: string): void {

@@ -109,6 +109,11 @@ import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
+import {
+	EditorReplacementHost,
+	type EditorReplacementSession,
+	VisibilityContainer,
+} from "./components/editor-replacement-host.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -265,6 +270,7 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
+	private chromeContainer: VisibilityContainer;
 	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -277,6 +283,7 @@ export class InteractiveMode {
 	private editorContainer: Container;
 	private footer: FooterComponent;
 	private footerDataProvider: FooterDataProvider;
+	private editorReplacementHost: EditorReplacementHost;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
 	private version: string;
@@ -400,6 +407,7 @@ export class InteractiveMode {
 		this.version = VERSION;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
+		this.chromeContainer = new VisibilityContainer();
 		this.headerContainer = new Container();
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
@@ -417,6 +425,12 @@ export class InteractiveMode {
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
+		this.editorReplacementHost = new EditorReplacementHost(
+			this.ui,
+			this.editorContainer,
+			this.chromeContainer,
+			() => this.editor as Component,
+		);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
@@ -636,14 +650,14 @@ export class InteractiveMode {
 			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
 		}
 
-		// Add header container as first child. Populate it after detectThemeIfUnset.
-		this.ui.addChild(this.headerContainer);
-
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
+		// Add chrome container as first child. Populate header after detectThemeIfUnset.
+		this.ui.addChild(this.chromeContainer);
+		this.chromeContainer.addChild(this.headerContainer);
+		this.chromeContainer.addChild(this.chatContainer);
+		this.chromeContainer.addChild(this.pendingMessagesContainer);
+		this.chromeContainer.addChild(this.statusContainer);
 		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
+		this.chromeContainer.addChild(this.widgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.widgetContainerBelow);
 		this.ui.addChild(this.footer);
@@ -2093,6 +2107,7 @@ export class InteractiveMode {
 				return;
 			}
 
+			const dialog = this.editorReplacementHost.begin({ hideChrome: true });
 			const onAbort = () => {
 				this.hideExtensionSelector();
 				resolve(undefined);
@@ -2112,13 +2127,15 @@ export class InteractiveMode {
 					this.hideExtensionSelector();
 					resolve(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
+				{
+					tui: this.ui,
+					timeout: opts?.timeout,
+					onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
+					maxHeight: dialog.maxHeight,
+				},
 			);
 
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionSelector);
-			this.ui.setFocus(this.extensionSelector);
-			this.ui.requestRender();
+			dialog.show(this.extensionSelector, this.extensionSelector);
 		});
 	}
 
@@ -2127,11 +2144,8 @@ export class InteractiveMode {
 	 */
 	private hideExtensionSelector(): void {
 		this.extensionSelector?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
+		this.editorReplacementHost.restoreEditor();
 		this.extensionSelector = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
 	}
 
 	/**
@@ -2168,6 +2182,7 @@ export class InteractiveMode {
 				return;
 			}
 
+			const dialog = this.editorReplacementHost.begin({ hideChrome: true });
 			const onAbort = () => {
 				this.hideExtensionInput();
 				resolve(undefined);
@@ -2187,13 +2202,10 @@ export class InteractiveMode {
 					this.hideExtensionInput();
 					resolve(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout },
+				{ tui: this.ui, timeout: opts?.timeout, maxHeight: dialog.maxHeight },
 			);
 
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionInput);
-			this.ui.setFocus(this.extensionInput);
-			this.ui.requestRender();
+			dialog.show(this.extensionInput, this.extensionInput);
 		});
 	}
 
@@ -2202,11 +2214,8 @@ export class InteractiveMode {
 	 */
 	private hideExtensionInput(): void {
 		this.extensionInput?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
+		this.editorReplacementHost.restoreEditor();
 		this.extensionInput = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
 	}
 
 	/**
@@ -2214,6 +2223,7 @@ export class InteractiveMode {
 	 */
 	private showExtensionEditor(title: string, prefill?: string): Promise<string | undefined> {
 		return new Promise((resolve) => {
+			const dialog = this.editorReplacementHost.begin({ hideChrome: true });
 			this.extensionEditor = new ExtensionEditorComponent(
 				this.ui,
 				this.keybindings,
@@ -2227,12 +2237,10 @@ export class InteractiveMode {
 					this.hideExtensionEditor();
 					resolve(undefined);
 				},
+				{ maxHeight: dialog.maxHeight },
 			);
 
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.extensionEditor);
-			this.ui.setFocus(this.extensionEditor);
-			this.ui.requestRender();
+			dialog.show(this.extensionEditor, this.extensionEditor);
 		});
 	}
 
@@ -2240,11 +2248,8 @@ export class InteractiveMode {
 	 * Hide the extension editor.
 	 */
 	private hideExtensionEditor(): void {
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
+		this.editorReplacementHost.restoreEditor();
 		this.extensionEditor = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
 	}
 
 	/**
@@ -3942,19 +3947,21 @@ export class InteractiveMode {
 
 	/**
 	 * Shows a selector component in place of the editor.
-	 * @param create Factory that receives a `done` callback and returns the component and focus target
+	 * @param create Factory that receives restoration/layout helpers and returns the component and focus target.
 	 */
-	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
-		const done = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-		};
-		const { component, focus } = create(done);
-		this.editorContainer.clear();
-		this.editorContainer.addChild(component);
-		this.ui.setFocus(focus);
-		this.ui.requestRender();
+	private showSelector(
+		create: (
+			done: () => void,
+			replacement: EditorReplacementSession,
+		) => {
+			component: Component;
+			focus: Component;
+		},
+	): void {
+		const replacement = this.editorReplacementHost.begin();
+		const done = () => replacement.restoreEditor();
+		const { component, focus } = create(done, replacement);
+		replacement.show(component, focus);
 	}
 
 	private showSettingsSelector(): void {
@@ -4671,7 +4678,7 @@ export class InteractiveMode {
 	private showLoginAuthTypeSelector(): void {
 		const subscriptionLabel = "Use a subscription";
 		const apiKeyLabel = "Use an API key";
-		this.showSelector((done) => {
+		this.showSelector((done, replacement) => {
 			const selector = new ExtensionSelectorComponent(
 				"Select authentication method:",
 				[subscriptionLabel, apiKeyLabel],
@@ -4684,6 +4691,7 @@ export class InteractiveMode {
 					done();
 					this.ui.requestRender();
 				},
+				{ maxHeight: replacement.maxHeight },
 			);
 			return { component: selector, focus: selector };
 		});
@@ -4904,12 +4912,8 @@ export class InteractiveMode {
 
 	private showOAuthLoginSelect(dialog: LoginDialogComponent, prompt: OAuthSelectPrompt): Promise<string | undefined> {
 		return new Promise((resolve) => {
-			const restoreDialog = () => {
-				this.editorContainer.clear();
-				this.editorContainer.addChild(dialog);
-				this.ui.setFocus(dialog);
-				this.ui.requestRender();
-			};
+			const replacement = this.editorReplacementHost.begin();
+			const restoreDialog = () => replacement.restore(dialog, dialog);
 			const labels = prompt.options.map((option) => option.label);
 			const selector = new ExtensionSelectorComponent(
 				prompt.message,
@@ -4922,11 +4926,9 @@ export class InteractiveMode {
 					restoreDialog();
 					resolve(undefined);
 				},
+				{ maxHeight: replacement.maxHeight },
 			);
-			this.editorContainer.clear();
-			this.editorContainer.addChild(selector);
-			this.ui.setFocus(selector);
-			this.ui.requestRender();
+			replacement.show(selector, selector);
 		});
 	}
 

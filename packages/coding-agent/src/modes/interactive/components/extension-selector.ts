@@ -3,16 +3,17 @@
  * Displays a list of string options with keyboard navigation.
  */
 
-import { Container, getKeybindings, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, getKeybindings, Text, type TUI } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
-import { DynamicBorder } from "./dynamic-border.ts";
+import { ExtensionDialogFrame, type ExtensionDialogMaxHeight } from "./extension-dialog-frame.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
 
 export interface ExtensionSelectorOptions {
 	tui?: TUI;
 	timeout?: number;
 	onToggleToolsExpanded?: () => void;
+	maxHeight?: ExtensionDialogMaxHeight;
 }
 
 export class ExtensionSelectorComponent extends Container {
@@ -41,12 +42,7 @@ export class ExtensionSelectorComponent extends Container {
 		this.onToggleToolsExpanded = opts?.onToggleToolsExpanded;
 		this.baseTitle = title;
 
-		this.addChild(new DynamicBorder());
-		this.addChild(new Spacer(1));
-
 		this.titleText = new Text(theme.fg("accent", theme.bold(title)), 1, 0);
-		this.addChild(this.titleText);
-		this.addChild(new Spacer(1));
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
 			this.countdown = new CountdownTimer(
@@ -58,23 +54,45 @@ export class ExtensionSelectorComponent extends Container {
 		}
 
 		this.listContainer = new Container();
-		this.addChild(this.listContainer);
-		this.addChild(new Spacer(1));
-		this.addChild(
-			new Text(
-				rawKeyHint("↑↓", "navigate") +
-					"  " +
-					keyHint("tui.select.confirm", "select") +
-					"  " +
-					keyHint("tui.select.cancel", "cancel"),
-				1,
-				0,
-			),
+		const hint = new Text(
+			rawKeyHint("↑↓", "navigate") +
+				"  " +
+				keyHint("tui.select.confirm", "select") +
+				"  " +
+				keyHint("tui.select.cancel", "cancel"),
+			1,
+			0,
 		);
-		this.addChild(new Spacer(1));
-		this.addChild(new DynamicBorder());
+		this.addChild(
+			new ExtensionDialogFrame(this.titleText, this.listContainer, hint, {
+				maxHeight: opts?.maxHeight,
+				clippedTitleText: "[increase terminal height to see remaining dialog text]",
+				renderBody: (width, maxRows) => this.renderVisibleOptions(width, maxRows),
+			}),
+		);
 
 		this.updateList();
+	}
+
+	private renderVisibleOptions(width: number, maxRows: number): string[] {
+		if (maxRows <= 0) return [];
+
+		// Render options as per-option groups, not flattened rows. Wrapped options can
+		// span multiple rows, while selectedIndex is an option index.
+		const optionGroups = this.listContainer.children.map((child) => child.render(width));
+		const optionRows = maxRows;
+		let firstOption = this.selectedIndex;
+		let lastOption = this.selectedIndex + 1;
+		let visibleOptionRows = optionGroups[this.selectedIndex]?.length ?? 0;
+		while (lastOption < optionGroups.length && visibleOptionRows + optionGroups[lastOption]!.length <= optionRows) {
+			visibleOptionRows += optionGroups[lastOption]!.length;
+			lastOption++;
+		}
+		while (firstOption > 0 && visibleOptionRows + optionGroups[firstOption - 1]!.length <= optionRows) {
+			firstOption--;
+			visibleOptionRows += optionGroups[firstOption]!.length;
+		}
+		return optionGroups.slice(firstOption, lastOption).flat().slice(0, optionRows);
 	}
 
 	private updateList(): void {
