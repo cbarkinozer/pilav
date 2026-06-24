@@ -1,0 +1,21 @@
+{
+  "name": "pi-extension-memory",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Cross-session memory extension for pi coding agent — stores and retrieves past exchanges via SQLite FTS5",
+  "scripts": {
+    "test": "vitest run",
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "vitest": "4.1.9"
+  }
+}

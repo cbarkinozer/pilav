@@ -417,14 +417,14 @@ pilav/
 
 *Week 1 — Goal: working Pi fork with LM Studio and a basic memory extension.*
 
-- [ ] Fork `earendil-works/pi` — track upstream branch
-- [ ] Configure for LM Studio (OpenAI-compatible endpoint in `models.json`)
-- [ ] Test both models (Gemma 4 4B, Qwen 3.5 8B) respond correctly
-- [ ] Build minimal memory extension:
-  - [ ] Hooks `onBeforePrompt` (inject relevant past context)
-  - [ ] Hooks `onAfterResponse` (save to SQLite with FTS5)
-  - [ ] Simple user profile store (JSON in SQLite)
-- [ ] Verify: cross-session recall works — start a new session and see past context injected
+- [x] Fork `earendil-works/pi` — track upstream branch
+- [x] Configure for LM Studio (OpenAI-compatible endpoint in `models.json`)
+- [x] Test both models (Gemma 4 4B, Qwen 3.5 8B) respond correctly
+- [x] Build minimal memory extension:
+  - [x] Hooks `onBeforePrompt` (inject relevant past context)
+  - [x] Hooks `onAfterResponse` (save to SQLite with FTS5)
+  - [x] Simple user profile store (JSON in SQLite)
+- [x] Verify: cross-session recall works — start a new session and see past context injected
 
 ### Phase 2 — Telegram Gateway
 
