@@ -11,9 +11,11 @@ function extractText(content: string | { type: string; text?: string }[] | undef
 		.join("\n");
 }
 
-const memoryDbPath = process.env.DB_PATH || process.env.PI_MEMORY_PATH || undefined;
-
 export default function (pi: ExtensionAPI) {
+	// Read env at factory-call time so each test invocation gets the right path
+	// and the closed-over value is still available when handlers fire.
+	const memoryDbPath = process.env.DB_PATH || process.env.PI_MEMORY_PATH || undefined;
+
 	pi.on("before_agent_start", (event) => {
 		if (memoryDbPath && !existsSync(memoryDbPath)) return;
 

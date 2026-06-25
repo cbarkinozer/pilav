@@ -40,3 +40,30 @@ Phase 1 gate passed for Gemma 4 4B. Memory extension correctly:
 1. Hooks `agent_end` to save conversation exchanges to SQLite/FTS5
 2. Hooks `before_agent_start` to inject `## Memory Context` with recent exchanges
 3. Model successfully recalls preference across sessions
+
+---
+
+## Qwen 3.5 8B — Session 1 — Store preference
+
+Model: lmstudio/qwen-3.5-8b (Qwen 3.5 8B via LM Studio)
+Extensions loaded: memory, lmstudio-provider
+
+Prompt: `remember that my favourite colour is blue`
+
+Model response: "Noted! I'll remember that your favourite colour is blue."
+
+## Qwen 3.5 8B — Session 2 — Recall verification
+
+Prompt: `what is my favourite colour`
+
+System prompt (from /debug output):
+```
+## Memory Context
+- Q: remember that my favourite colour is blue A: Noted! I'll remember that your favourite colour is blue.
+```
+
+Model response: "Your favourite colour is blue."
+
+## Result
+
+Phase 1 gate passed for qwen-3.5-8b. Memory extension correctly injects `## Memory Context` and the model recalls the preference across sessions.

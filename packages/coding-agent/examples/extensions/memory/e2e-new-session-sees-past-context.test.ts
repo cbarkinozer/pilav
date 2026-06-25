@@ -38,6 +38,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { getRecentExchanges } from "./db.ts";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,12 +63,6 @@ const _LMSTUDIO_EXTENSION_INDEX = resolve(__dirname, "../lmstudio-provider/index
  * through the extension loader so the TDD "red" state is a module-not-found
  * error rather than a TypeScript compile error.
  */
-type MemoryEntry = {
-	text: string;
-	timestamp?: number | string;
-	sessionId?: string;
-};
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -260,38 +255,31 @@ describe("T007 scenario 1: memory write on agent_end", () => {
 	});
 
 	it("memory store file is created after sending the blue-colour exchange", async () => {
-		// FAILS until index.ts implements an agent_end handler that writes
-		// the exchange to the memory store at PI_MEMORY_PATH.
 		await invokeAgentEnd(MEMORY_EXTENSION_INDEX, memoryStorePath);
 
-		expect(existsSync(memoryStorePath), `Expected memory store at ${memoryStorePath} to exist after agent_end.`).toBe(
+		expect(existsSync(memoryStorePath), `Expected memory store (SQLite) at ${memoryStorePath} to exist after agent_end.`).toBe(
 			true,
 		);
 	});
 
-	it("memory store contains a JSON array with at least one entry", async () => {
+	it("memory store contains at least one exchange", async () => {
 		await invokeAgentEnd(MEMORY_EXTENSION_INDEX, memoryStorePath);
 
-		const raw = readFileSync(memoryStorePath, "utf-8");
-		const parsed: unknown = JSON.parse(raw);
-
-		expect(Array.isArray(parsed), "Expected memory store to be a JSON array.").toBe(true);
-		expect((parsed as unknown[]).length, "Expected at least one entry in the memory store.").toBeGreaterThanOrEqual(
-			1,
-		);
+		const exchanges = getRecentExchanges(10, memoryStorePath);
+		expect(exchanges.length, "Expected at least one exchange in the memory store.").toBeGreaterThanOrEqual(1);
 	});
 
-	it("at least one entry in the memory store contains the word 'blue'", async () => {
+	it("at least one exchange contains the word 'blue'", async () => {
 		await invokeAgentEnd(MEMORY_EXTENSION_INDEX, memoryStorePath);
 
-		const raw = readFileSync(memoryStorePath, "utf-8");
-		const entries = JSON.parse(raw) as MemoryEntry[];
-
-		const hasBlue = entries.some(
-			(entry) => typeof entry.text === "string" && entry.text.toLowerCase().includes("blue"),
+		const exchanges = getRecentExchanges(10, memoryStorePath);
+		const hasBlue = exchanges.some(
+			(e) =>
+				e.user_prompt.toLowerCase().includes("blue") ||
+				e.assistant_reply.toLowerCase().includes("blue"),
 		);
 
-		expect(hasBlue, "Expected at least one memory entry whose text field contains 'blue'.").toBe(true);
+		expect(hasBlue, "Expected at least one exchange whose user_prompt or assistant_reply contains 'blue'.").toBe(true);
 	});
 });
 
