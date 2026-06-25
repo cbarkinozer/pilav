@@ -1,0 +1,19 @@
+{
+  "name": "@pilav/tts-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Test-time scaling extension for Pilav — extended reasoning loops with checkpointing",
+  "pi": {
+    "extension": "./index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.6"
+  }
+}
