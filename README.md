@@ -461,12 +461,12 @@ New commands: `/memory-facts`, `/memory-profile`, `/memory-search <query>`, `/me
 
 *Week 4 — Goal: rich tool ecosystem via MCP.*
 
-- [ ] MCP extension implementing `@modelcontextprotocol/sdk`
-- [ ] Built-in MCP servers: filesystem, shell, web, git
-- [ ] Auto-discovery of MCP servers from `.pilav/mcp/`
-- [ ] Sandboxed shell execution (temp directories, path restrictions)
-- [ ] Tool result caching (avoid repeated expensive operations during TTS)
-- [ ] Verify: agent can browse the web, edit files, run git commands via MCP
+- [x] MCP extension implementing `@modelcontextprotocol/sdk` (`mcp/index.ts`, `mcp/client.ts`)
+- [x] Built-in MCP servers: filesystem, shell, web, git (`mcp/servers/`)
+- [x] Auto-discovery of MCP servers from `~/.pilav/mcp/config.json` or `.pilav/mcp/config.json` (`mcp/config.ts`)
+- [x] Sandboxed shell execution — commands run in isolated temp directories; `ALLOWED_COMMANDS` allowlist (`mcp/servers/shell.ts`)
+- [x] Tool result caching — LRU cache, 5-min TTL, 100-entry max, skips mutating tools (`mcp/cache.ts`)
+- [ ] Verify: agent can browse the web, edit files, run git commands via MCP (pending manual test — requires MCP servers running)
 
 ### Phase 5 — Test-Time Scaling
 

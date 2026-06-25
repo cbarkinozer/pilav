@@ -1,0 +1,24 @@
+{
+  "name": "pi-extension-mcp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MCP (Model Context Protocol) extension for pi coding agent — filesystem, shell, web, git tools via MCP servers",
+  "scripts": {
+    "test": "vitest run",
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0"
+  },
+  "devDependencies": {
+    "vitest": "4.1.9"
+  }
+}
