@@ -443,16 +443,19 @@ pilav/
 
 *Week 3 — Goal: the agent knows you across days and contexts.*
 
-- [ ] Fact extraction pipeline (few-shot prompt → structured JSON → SQLite)
-- [ ] Dialectic user profile (thesis/antithesis/synthesis after N sessions)
-- [ ] FTS5 full-text search with relevance ranking
-- [ ] Contextual injection: on startup, query memory for:
-  - User profile summary
-  - Top-3 most relevant past sessions
-  - Recent facts related to current project
-- [ ] Background profile consolidation (run after session ends)
-- [ ] Optional Python sidecar for heavier NLP (fact extraction, classification)
-- [ ] Verify: after a week of use, agent knows your preferences without being told
+- [x] Fact extraction pipeline — LM Studio HTTP call after each session → structured `{ subject, predicate, object, confidence }` → SQLite `facts` table with FTS5 (`extractor.ts`)
+- [x] Dialectic user profile — consolidation every 5 sessions: thesis + antithesis + synthesis stored as profile keys `user_profile_thesis`, `user_profile_antithesis`, `user_profile_synthesis` (`profiler.ts`)
+- [x] FTS5 full-text search with BM25 relevance ranking (`searchExchangesByRelevance`, `searchFacts`)
+- [x] Contextual injection on startup — 4-section `## Memory Context` block:
+  - `### About You` — profile synthesis
+  - `### Known Facts` — top 10 extracted facts
+  - `### Relevant Past Context` — top 3 BM25-ranked past exchanges matching current prompt
+  - `### Recent History` — last 3 exchanges (capped at ~2000 tokens total)
+- [x] Background profile consolidation runs automatically after `agent_end` (no blocking)
+- [ ] Optional Python sidecar for heavier NLP (deferred to future phase)
+- [ ] Verify: after a week of use, agent knows your preferences without being told (pending live use)
+
+New commands: `/memory-facts`, `/memory-profile`, `/memory-search <query>`, `/memory-consolidate`
 
 ### Phase 4 — MCP & Tools
 

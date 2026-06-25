@@ -51,6 +51,24 @@ function ensureSchema(db: DatabaseSync): void {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS facts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			subject TEXT NOT NULL,
+			predicate TEXT NOT NULL,
+			object TEXT NOT NULL,
+			confidence REAL NOT NULL DEFAULT 0.5,
+			created_at TEXT DEFAULT (datetime('now'))
+		);
+		CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+			subject, predicate, object,
+			content='facts',
+			content_rowid='id',
+			tokenize='porter'
+		);
+		CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+			INSERT INTO facts_fts(rowid, subject, predicate, object)
+			VALUES (new.id, new.subject, new.predicate, new.object);
+		END;
 	`);
 }
 
@@ -102,6 +120,37 @@ export function searchExchanges(
 	}>;
 }
 
+export function searchExchangesByRelevance(
+	query: string,
+	limit: number,
+	dbPath?: string,
+): Array<{
+	session_id: string;
+	user_prompt: string;
+	assistant_reply: string;
+}> {
+	if (!query || query.trim() === "") return [];
+
+	const path = resolvePath(dbPath);
+	const db = openDb(path);
+	ensureSchema(db);
+
+	return db
+		.prepare(
+			"SELECT e.session_id, e.user_prompt, e.assistant_reply " +
+				"FROM exchanges e " +
+				"JOIN exchanges_fts f ON e.id = f.rowid " +
+				"WHERE exchanges_fts MATCH ? " +
+				"ORDER BY f.rank " +
+				"LIMIT ?",
+		)
+		.all(query, limit) as Array<{
+		session_id: string;
+		user_prompt: string;
+		assistant_reply: string;
+	}>;
+}
+
 export function getRecentExchanges(
 	limit: number,
 	dbPath?: string,
@@ -123,6 +172,14 @@ export function getRecentExchanges(
 	}>;
 }
 
+export function countExchanges(dbPath?: string): number {
+	const path = resolvePath(dbPath);
+	const db = openDb(path);
+	ensureSchema(db);
+	const row = db.prepare("SELECT COUNT(*) as count FROM exchanges").get() as { count: number };
+	return row.count;
+}
+
 export function setProfile(key: string, value: string, dbPath?: string): void {
 	const path = resolvePath(dbPath);
 	const db = openDb(path);
@@ -136,4 +193,80 @@ export function getProfile(key: string, dbPath?: string): string | undefined {
 	ensureSchema(db);
 	const rows = db.prepare("SELECT value FROM profile WHERE key = ?").all(key) as Array<{ value: string }>;
 	return rows.length > 0 ? rows[0].value : undefined;
+}
+
+export type Fact = {
+	subject: string;
+	predicate: string;
+	object: string;
+	confidence: number;
+};
+
+export function insertFact(fact: Fact, dbPath?: string): void {
+	const path = resolvePath(dbPath);
+	const db = openDb(path);
+	ensureSchema(db);
+	db.prepare("INSERT INTO facts(subject, predicate, object, confidence) VALUES(?, ?, ?, ?)").run(
+		fact.subject,
+		fact.predicate,
+		fact.object,
+		fact.confidence,
+	);
+}
+
+export function getFacts(
+	limit: number,
+	dbPath?: string,
+): Array<{
+	id: number;
+	subject: string;
+	predicate: string;
+	object: string;
+	confidence: number;
+}> {
+	const path = resolvePath(dbPath);
+	const db = openDb(path);
+	ensureSchema(db);
+	return db
+		.prepare("SELECT id, subject, predicate, object, confidence FROM facts ORDER BY id DESC LIMIT ?")
+		.all(limit) as Array<{
+		id: number;
+		subject: string;
+		predicate: string;
+		object: string;
+		confidence: number;
+	}>;
+}
+
+export function searchFacts(
+	query: string,
+	limit: number,
+	dbPath?: string,
+): Array<{
+	subject: string;
+	predicate: string;
+	object: string;
+	confidence: number;
+}> {
+	if (!query || query.trim() === "") return [];
+
+	const path = resolvePath(dbPath);
+	const db = openDb(path);
+	ensureSchema(db);
+
+	return db
+		.prepare(
+			"SELECT f.subject, f.predicate, f.object, f.confidence " +
+				"FROM facts f " +
+				"JOIN facts_fts ff ON f.id = ff.rowid " +
+				"WHERE facts_fts MATCH ? " +
+				"ORDER BY ff.rank " +
+				"LIMIT ?",
+		)
+		.all(query, limit) as Array<{
+		subject: string;
+		predicate: string;
+		object: string;
+		confidence: number;
+	}>;
 }
