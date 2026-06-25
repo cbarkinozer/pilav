@@ -472,13 +472,14 @@ New commands: `/memory-facts`, `/memory-profile`, `/memory-search <query>`, `/me
 
 *Week 5 — Goal: agent works overnight on complex tasks.*
 
-- [ ] Extended reasoning loop (break task into subtasks, execute sequentially)
-- [ ] Checkpoint system: save full agent state every N steps to `.pilav/checkpoints/`
-- [ ] Crash recovery: detect incomplete checkpoints, offer resume
-- [ ] Status streaming: periodic progress updates pushed to Telegram via gateway
-- [ ] Graceful interrupt (`/cancel` from Telegram)
-- [ ] Overnight use case: "Analyze this codebase and write a migration plan"
-- [ ] Verify: start a task, leave it running for 2+ hours, check results
+- [x] Extended reasoning loop — plan → subtasks → sequential execution (`tts/loop.ts`)
+- [x] Checkpoint system — saves full state to `~/.pilav/checkpoints/` every N steps, versioned JSON (`tts/checkpoint.ts`)
+- [x] Crash recovery — on `/tts-resume`, detects last incomplete checkpoint and continues from it
+- [x] Status streaming — file-based IPC writes `tts-status.json`; gateway polls and forwards progress to Telegram (`tts/streaming.ts`)
+- [x] Graceful interrupt — `/tts-cancel` writes a cancel flag; loop checks between subtasks and exits cleanly
+- [x] Slash commands: `/tts-run <task>`, `/tts-status`, `/tts-cancel`, `/tts-resume` (`tts/index.ts`)
+- [ ] Overnight use case: "Analyze this codebase and write a migration plan" (pending live test)
+- [ ] Verify: start a task, leave it running for 2+ hours, check results (pending live test)
 
 ### Phase 6 — Speed & Fidelity (Future)
 
