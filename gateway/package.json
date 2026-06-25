@@ -1,0 +1,26 @@
+{
+  "name": "pilav-gateway",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Telegram gateway daemon for the Pilav AI agent — routes messages from Telegram to Pi via RPC",
+  "scripts": {
+    "start": "node src/index.ts",
+    "test": "vitest run",
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "@earendil-works/pi-coding-agent": "file:../packages/coding-agent"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/node-telegram-bot-api": "^0.64.0",
+    "typescript": "^5.8.0",
+    "vitest": "4.1.9"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

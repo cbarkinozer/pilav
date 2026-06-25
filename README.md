@@ -430,14 +430,14 @@ pilav/
 
 *Week 2 — Goal: message the agent from anywhere via Telegram.*
 
-- [ ] Node.js daemon with `node-telegram-bot-api`
-- [ ] RPC client that communicates with Pi via JSONL on stdin/stdout
-- [ ] Message queue: concurrent requests serialized per user
-- [ ] Session routing: separate agent contexts per Telegram chat
-- [ ] `launchd` plist for 24/7 operation
-- [ ] `/status`, `/cancel` handlers
-- [ ] File/media exchange (code snippets, images, documents)
-- [ ] Verify: send message from Telegram → Pi processes it → response back
+- [x] Node.js daemon with `node-telegram-bot-api` (long-polling, no webhook required)
+- [x] RPC client that communicates with Pi via JSONL on stdin/stdout (`gateway/src/rpc-client.ts`)
+- [x] Message queue: concurrent requests serialized per user (`gateway/src/queue.ts`)
+- [x] Session routing: separate agent contexts per Telegram chat, 30-min idle timeout (`gateway/src/router.ts`)
+- [x] `launchd` plist for 24/7 operation (`gateway/launchd/com.pilav.gateway.plist`)
+- [x] `/status`, `/cancel` handlers (`gateway/src/bot.ts`)
+- [x] File/media exchange (code snippets, images, documents forwarded to agent)
+- [ ] Verify: send message from Telegram → Pi processes it → response back (pending manual test — requires `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_USERS`)
 
 ### Phase 3 — Memory & Recall
 

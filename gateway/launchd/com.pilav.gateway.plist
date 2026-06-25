@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pilav.gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>--experimental-vm-modules</string>
+        <string>src/index.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/cbarkinozer/Documents/GitHub/pilav/gateway</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TELEGRAM_BOT_TOKEN</key>
+        <string>REPLACE_WITH_YOUR_BOT_TOKEN</string>
+        <key>TELEGRAM_ALLOWED_USERS</key>
+        <string>REPLACE_WITH_YOUR_TELEGRAM_USER_ID</string>
+        <key>NODE_ENV</key>
+        <string>production</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/cbarkinozer/Library/Logs/pilav-gateway.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/cbarkinozer/Library/Logs/pilav-gateway.log</string>
+</dict>
+</plist>
