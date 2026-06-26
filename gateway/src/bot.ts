@@ -128,12 +128,40 @@ export function createHandlers(deps: HandlerDeps) {
             await replyChunked(chatId, response || "(no response)");
           }
         } else {
-          // Casual chat → direct Qwen via LM Studio (fast, no-think by default)
+          // Casual chat → direct Qwen via LM Studio with streaming + thinking blocks
           try {
-            const response = deps.lmChatFn
-              ? await deps.lmChatFn(chatId, text)
-              : await getChatSession(chatId).chat(text);
-            await replyChunked(chatId, response || "I didn't get a response from the model. Try rephrasing.");
+            if (deps.lmChatFn) {
+              // Test path: no streaming
+              const response = await deps.lmChatFn(chatId, text);
+              await replyChunked(chatId, response || "I didn't get a response from the model. Try rephrasing.");
+            } else if (deps.sendStreamingMessage && deps.editMessage) {
+              // Streaming path: send placeholder, edit in-place with thinking blocks
+              const msgId = await deps.sendStreamingMessage(chatId, "⏳ Thinking…");
+              let lastEdit = Date.now();
+              const EDIT_INTERVAL_MS = 2000;
+
+              const finalResponse = await getChatSession(chatId).chatStreaming(text, async (display) => {
+                const now = Date.now();
+                if (now - lastEdit >= EDIT_INTERVAL_MS) {
+                  lastEdit = now;
+                  await deps.editMessage!(chatId, msgId, display.slice(-TELEGRAM_MAX_LENGTH) || "⏳ Thinking…");
+                }
+              });
+
+              const final = finalResponse || "I didn't get a response from the model. Try rephrasing.";
+              if (final.length <= TELEGRAM_MAX_LENGTH) {
+                await deps.editMessage!(chatId, msgId, final);
+              } else {
+                await deps.editMessage!(chatId, msgId, final.slice(0, TELEGRAM_MAX_LENGTH));
+                for (const chunk of splitMessage(final.slice(TELEGRAM_MAX_LENGTH))) {
+                  await sendReply(chatId, chunk);
+                }
+              }
+            } else {
+              // Fallback: non-streaming
+              const response = await getChatSession(chatId).chat(text);
+              await replyChunked(chatId, response || "I didn't get a response from the model. Try rephrasing.");
+            }
           } catch (err) {
             console.error("[pilav-gateway] LM Studio chat error:", (err as Error).message);
             await sendReply(chatId, `Sorry, model error: ${(err as Error).message.slice(0, 200)}`);

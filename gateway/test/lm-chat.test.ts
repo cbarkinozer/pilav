@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { detectThinkingMode, isTaskRequest, wrapWithThinkingMode, LMStudioChat } from "../src/lm-chat.ts";
+import { detectThinkingMode, isTaskRequest, wrapWithThinkingMode, formatStreamDisplay, LMStudioChat } from "../src/lm-chat.ts";
 
 describe("detectThinkingMode", () => {
 	it("returns no_think for short casual messages", () => {
@@ -33,18 +33,42 @@ describe("isTaskRequest", () => {
 
 describe("wrapWithThinkingMode", () => {
 	it("prepends /think to the message", () => {
-		const result = wrapWithThinkingMode("do something", "think");
-		expect(result).toBe("/think\ndo something");
+		expect(wrapWithThinkingMode("do something", "think")).toBe("/think\ndo something");
 	});
 
 	it("prepends /no_think to the message", () => {
-		const result = wrapWithThinkingMode("hi", "no_think");
-		expect(result).toBe("/no_think\nhi");
+		expect(wrapWithThinkingMode("hi", "no_think")).toBe("/no_think\nhi");
 	});
 });
 
-describe("LMStudioChat", () => {
-	it("sends max_tokens of at least 4096 in the request", async () => {
+describe("formatStreamDisplay", () => {
+	it("shows only thinking block while thinking", () => {
+		const result = formatStreamDisplay("let me think about this", "");
+		expect(result).toContain("<thinking>");
+		expect(result).toContain("let me think about this");
+		expect(result).toContain("</thinking>");
+	});
+
+	it("shows thinking block and answer when both present", () => {
+		const result = formatStreamDisplay("some reasoning", "The answer is 42.");
+		expect(result).toContain("<thinking>");
+		expect(result).toContain("</thinking>");
+		expect(result).toContain("The answer is 42.");
+	});
+
+	it("shows only answer when no thinking", () => {
+		const result = formatStreamDisplay("", "Just the answer.");
+		expect(result).not.toContain("<thinking>");
+		expect(result).toBe("Just the answer.");
+	});
+
+	it("returns placeholder when both empty", () => {
+		expect(formatStreamDisplay("", "")).toBe("⏳ Thinking…");
+	});
+});
+
+describe("LMStudioChat — chat()", () => {
+	it("sends max_tokens of at least 16384 in the request", async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ choices: [{ message: { content: "Hello!" } }] }),
@@ -54,10 +78,10 @@ describe("LMStudioChat", () => {
 		await chat.chat("hi");
 
 		const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { max_tokens: number };
-		expect(body.max_tokens).toBeGreaterThanOrEqual(4096);
+		expect(body.max_tokens).toBeGreaterThanOrEqual(16384);
 	});
 
-	it("sends the user message as plain text without any prefixes", async () => {
+	it("sends the user message as plain text without prefixes", async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ choices: [{ message: { content: "Sure!" } }] }),
@@ -71,10 +95,10 @@ describe("LMStudioChat", () => {
 		expect(userMsg?.content).toBe("build me a TypeScript REST API");
 	});
 
-	it("strips <think> tags from reply before storing in history", async () => {
+	it("strips <think> tags from reply", async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ choices: [{ message: { content: "<think>reasoning here</think>\nThe answer is 42." } }] }),
+			json: async () => ({ choices: [{ message: { content: "<think>reasoning</think>\nThe answer is 42." } }] }),
 		});
 
 		const chat = new LMStudioChat({ fetch: fetchMock });
@@ -83,21 +107,76 @@ describe("LMStudioChat", () => {
 	});
 
 	it("maintains conversation history across turns", async () => {
-		let callCount = 0;
-		const fetchMock = vi.fn().mockImplementation(async () => {
-			callCount++;
-			return {
-				ok: true,
-				json: async () => ({ choices: [{ message: { content: `Reply ${callCount}` } }] }),
-			};
-		});
+		let n = 0;
+		const fetchMock = vi.fn().mockImplementation(async () => ({
+			ok: true,
+			json: async () => ({ choices: [{ message: { content: `Reply ${++n}` } }] }),
+		}));
 
 		const chat = new LMStudioChat({ fetch: fetchMock });
 		await chat.chat("first message");
 		await chat.chat("second message");
 
-		const body = JSON.parse(fetchMock.mock.calls[1][1].body as string) as { messages: Array<{ role: string; content: string }> };
-		const assistantTurns = body.messages.filter((m) => m.role === "assistant");
-		expect(assistantTurns.length).toBeGreaterThanOrEqual(1);
+		const body = JSON.parse(fetchMock.mock.calls[1][1].body as string) as { messages: Array<{ role: string }> };
+		expect(body.messages.filter((m) => m.role === "assistant").length).toBeGreaterThanOrEqual(1);
+	});
+});
+
+describe("LMStudioChat — chatStreaming()", () => {
+	function makeSSEStream(tokens: string[]): ReadableStream<Uint8Array> {
+		const encoder = new TextEncoder();
+		return new ReadableStream({
+			start(controller) {
+				for (const token of tokens) {
+					const line = `data: ${JSON.stringify({ choices: [{ delta: { content: token }, finish_reason: null }] })}\n\n`;
+					controller.enqueue(encoder.encode(line));
+				}
+				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+				controller.close();
+			},
+		});
+	}
+
+	it("calls onChunk and returns clean answer", async () => {
+		const tokens = ["<think>", "reasoning", "</think>", "Final answer."];
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			body: makeSSEStream(tokens),
+		});
+
+		const chunks: string[] = [];
+		const chat = new LMStudioChat({ fetch: fetchMock });
+		const result = await chat.chatStreaming("hi", (d) => { chunks.push(d); });
+
+		expect(chunks.length).toBeGreaterThan(0);
+		expect(result).toBe("Final answer.");
+	});
+
+	it("onChunk display contains <thinking> block while in think phase", async () => {
+		const tokens = ["<think>", "some reasoning here"];
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			body: makeSSEStream(tokens),
+		});
+
+		const chunks: string[] = [];
+		const chat = new LMStudioChat({ fetch: fetchMock });
+		await chat.chatStreaming("question", (d) => { chunks.push(d); });
+
+		const thinkingChunk = chunks.find((c) => c.includes("<thinking>"));
+		expect(thinkingChunk).toBeDefined();
+	});
+
+	it("sends stream: true in the request", async () => {
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			body: makeSSEStream(["hello"]),
+		});
+
+		const chat = new LMStudioChat({ fetch: fetchMock });
+		await chat.chatStreaming("hi", () => {});
+
+		const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { stream: boolean };
+		expect(body.stream).toBe(true);
 	});
 });
