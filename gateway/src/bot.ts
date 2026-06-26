@@ -7,6 +7,21 @@ import type { UserQueue } from "./queue.ts";
 import type { SessionRouter } from "./router.ts";
 import { LMStudioChat, isTaskRequest } from "./lm-chat.ts";
 
+/**
+ * Convert CommonMark-style markdown (from LLMs) to Telegram Markdown.
+ * Telegram Markdown uses *bold* and _italic_, not **bold** / __italic__.
+ * Falls back gracefully: returns original text if conversion would break.
+ */
+export function toTelegramMarkdown(text: string): string {
+  return text
+    .replace(/\*\*\*(.+?)\*\*\*/g, "*$1*")       // ***bold italic*** → *bold italic*
+    .replace(/\*\*(.+?)\*\*/g, "*$1*")             // **bold** → *bold*
+    .replace(/__(.+?)__/g, "_$1_")                 // __italic__ → _italic_
+    .replace(/^#{1,6}\s+(.+)$/gm, "*$1*")          // # Heading → *Heading*
+    .replace(/^[-*]\s/gm, "• ")                    // - list / * list → bullet
+    .replace(/^\d+\.\s/gm, (m) => m);              // numbered lists: keep as-is
+}
+
 // One LMStudioChat instance per chat ID for conversation history
 const chatSessions = new Map<number, LMStudioChat>();
 
@@ -303,7 +318,12 @@ export class TelegramGateway {
     this.bot = new TelegramBot(token, { polling: true });
 
     const sendReply = async (chatId: number, text: string) => {
-      await this.bot.sendMessage(chatId, text);
+      const formatted = toTelegramMarkdown(text);
+      try {
+        await this.bot.sendMessage(chatId, formatted, { parse_mode: "Markdown" });
+      } catch {
+        await this.bot.sendMessage(chatId, text);
+      }
     };
 
     const sendTyping = async (chatId: number) => {
@@ -316,10 +336,15 @@ export class TelegramGateway {
     };
 
     const editMessage = async (chatId: number, messageId: number, text: string): Promise<void> => {
+      const formatted = toTelegramMarkdown(text);
       try {
-        await this.bot.editMessageText(text, { chat_id: chatId, message_id: messageId });
+        await this.bot.editMessageText(formatted, { chat_id: chatId, message_id: messageId, parse_mode: "Markdown" });
       } catch {
-        // Telegram throws if the text hasn't changed — ignore silently
+        try {
+          await this.bot.editMessageText(text, { chat_id: chatId, message_id: messageId });
+        } catch {
+          // Telegram throws if the text hasn't changed — ignore silently
+        }
       }
     };
 
@@ -341,7 +366,9 @@ export class TelegramGateway {
   }
 
   sendMessage(chatId: number, text: string): void {
-    void this.bot.sendMessage(chatId, text).catch(() => {});
+    const formatted = toTelegramMarkdown(text);
+    void this.bot.sendMessage(chatId, formatted, { parse_mode: "Markdown" })
+      .catch(() => this.bot.sendMessage(chatId, text).catch(() => {}));
   }
 
   sendPhoto(chatId: number, filePath: string, caption?: string): void {
