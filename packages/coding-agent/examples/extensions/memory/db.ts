@@ -214,6 +214,15 @@ export function insertFact(fact: Fact, dbPath?: string): void {
 	);
 }
 
+const DECAY_HALF_LIFE_DAYS = 90;
+const DECAY_MIN_CONFIDENCE = 0.1;
+
+function applyDecay(confidence: number, createdAt: string): number {
+	const ageMs = Date.now() - new Date(createdAt + "Z").getTime();
+	const ageDays = ageMs / (1000 * 60 * 60 * 24);
+	return confidence * Math.exp(-ageDays / DECAY_HALF_LIFE_DAYS);
+}
+
 export function getFacts(
 	limit: number,
 	dbPath?: string,
@@ -227,15 +236,23 @@ export function getFacts(
 	const path = resolvePath(dbPath);
 	const db = openDb(path);
 	ensureSchema(db);
-	return db
-		.prepare("SELECT id, subject, predicate, object, confidence FROM facts ORDER BY id DESC LIMIT ?")
-		.all(limit) as Array<{
+	const rows = db
+		.prepare("SELECT id, subject, predicate, object, confidence, created_at FROM facts ORDER BY id DESC LIMIT ?")
+		.all(limit * 3) as Array<{
 		id: number;
 		subject: string;
 		predicate: string;
 		object: string;
 		confidence: number;
+		created_at: string;
 	}>;
+
+	return rows
+		.map((r) => ({ ...r, confidence: applyDecay(r.confidence, r.created_at) }))
+		.filter((r) => r.confidence >= DECAY_MIN_CONFIDENCE)
+		.sort((a, b) => b.confidence - a.confidence)
+		.slice(0, limit)
+		.map(({ created_at: _ca, ...rest }) => rest);
 }
 
 export function searchFacts(

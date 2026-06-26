@@ -10,6 +10,11 @@ export interface HandlerDeps {
   router: Pick<SessionRouter, "getOrCreate">;
   queue: Pick<UserQueue, "enqueue">;
   sendReply: (chatId: number, text: string) => Promise<void>;
+  sendTyping?: (chatId: number) => Promise<void>;
+  /** Send an initial message and return its message_id (for later editing). */
+  sendStreamingMessage?: (chatId: number, text: string) => Promise<number>;
+  /** Edit a previously sent message in-place with new text. */
+  editMessage?: (chatId: number, messageId: number, text: string) => Promise<void>;
   allowedUsers: number[];
   bot?: TelegramBot;
 }
@@ -38,13 +43,23 @@ function isAllowed(userId: number, allowedUsers: number[]): boolean {
   return allowedUsers.includes(userId);
 }
 
+const TYPING_INTERVAL_MS = 4000;
+
 export function createHandlers(deps: HandlerDeps) {
   const { router, queue, sendReply, allowedUsers } = deps;
+
+  const sendTyping = deps.sendTyping ?? ((chatId: number) =>
+    deps.bot ? deps.bot.sendChatAction(chatId, "typing").then(() => {}) : Promise.resolve()
+  );
 
   async function replyChunked(chatId: number, text: string): Promise<void> {
     for (const chunk of splitMessage(text)) {
       await sendReply(chatId, chunk);
     }
+  }
+
+  function startTypingInterval(chatId: number): ReturnType<typeof setInterval> {
+    return setInterval(() => { void sendTyping(chatId); }, TYPING_INTERVAL_MS);
   }
 
   async function onMessage(msg: TgMessage): Promise<void> {
@@ -59,10 +74,48 @@ export function createHandlers(deps: HandlerDeps) {
     const text = msg.text ?? "";
     if (!text || text.startsWith("/")) return;
 
+    void sendTyping(chatId);
     await queue.enqueue(userId, async () => {
-      const session = await router.getOrCreate(chatId);
-      const response = await session.sendMessage(text);
-      await replyChunked(chatId, response || "(no response)");
+      const typingTimer = startTypingInterval(chatId);
+      try {
+        const session = await router.getOrCreate(chatId);
+
+        if (deps.sendStreamingMessage && deps.editMessage && "sendMessageStreaming" in session) {
+          // Streaming path: send Thinking..., then edit-in-place as tokens arrive
+          const thinkingId = await deps.sendStreamingMessage(chatId, "⏳ Thinking…");
+          let lastEdit = Date.now();
+          const EDIT_INTERVAL_MS = 2000;
+
+          const response = await (session as any).sendMessageStreaming(
+            text,
+            async (accumulated: string) => {
+              const now = Date.now();
+              if (now - lastEdit >= EDIT_INTERVAL_MS) {
+                lastEdit = now;
+                const preview = accumulated.slice(-TELEGRAM_MAX_LENGTH);
+                await deps.editMessage!(chatId, thinkingId, preview || "⏳ Thinking…");
+              }
+            },
+          );
+
+          const final = response || "(no response)";
+          if (final.length <= TELEGRAM_MAX_LENGTH) {
+            await deps.editMessage!(chatId, thinkingId, final);
+          } else {
+            // Response too long for a single edit — replace thinking msg with first chunk, send rest
+            await deps.editMessage!(chatId, thinkingId, final.slice(0, TELEGRAM_MAX_LENGTH));
+            for (const chunk of splitMessage(final.slice(TELEGRAM_MAX_LENGTH))) {
+              await sendReply(chatId, chunk);
+            }
+          }
+        } else {
+          // Fallback: wait-then-send (original behaviour)
+          const response = await session.sendMessage(text);
+          await replyChunked(chatId, response || "(no response)");
+        }
+      } finally {
+        clearInterval(typingTimer);
+      }
     });
   }
 
@@ -111,6 +164,8 @@ export function createHandlers(deps: HandlerDeps) {
       return;
     }
 
+    void sendTyping(chatId);
+
     if (!msg.document || !deps.bot) {
       await sendReply(chatId, "File received (no bot instance to download).");
       return;
@@ -122,9 +177,14 @@ export function createHandlers(deps: HandlerDeps) {
       const prompt = `[File uploaded: ${filePath}]\nPlease analyze or use this file as needed.`;
 
       await queue.enqueue(userId, async () => {
-        const session = await router.getOrCreate(chatId);
-        const response = await session.sendMessage(prompt);
-        await replyChunked(chatId, response || "(no response)");
+        const typingTimer = startTypingInterval(chatId);
+        try {
+          const session = await router.getOrCreate(chatId);
+          const response = await session.sendMessage(prompt);
+          await replyChunked(chatId, response || "(no response)");
+        } finally {
+          clearInterval(typingTimer);
+        }
       });
     } catch (err) {
       await sendReply(chatId, `Failed to download file: ${(err as Error).message}`);
@@ -140,6 +200,8 @@ export function createHandlers(deps: HandlerDeps) {
       return;
     }
 
+    void sendTyping(chatId);
+
     if (!msg.photo || msg.photo.length === 0 || !deps.bot) {
       await sendReply(chatId, "Photo received (no bot instance to download).");
       return;
@@ -152,9 +214,14 @@ export function createHandlers(deps: HandlerDeps) {
       const prompt = `[Photo uploaded: ${filePath}]\nPlease describe or analyze this image.`;
 
       await queue.enqueue(userId, async () => {
-        const session = await router.getOrCreate(chatId);
-        const response = await session.sendMessage(prompt);
-        await replyChunked(chatId, response || "(no response)");
+        const typingTimer = startTypingInterval(chatId);
+        try {
+          const session = await router.getOrCreate(chatId);
+          const response = await session.sendMessage(prompt);
+          await replyChunked(chatId, response || "(no response)");
+        } finally {
+          clearInterval(typingTimer);
+        }
       });
     } catch (err) {
       await sendReply(chatId, `Failed to download photo: ${(err as Error).message}`);
@@ -185,7 +252,24 @@ export class TelegramGateway {
       await this.bot.sendMessage(chatId, text);
     };
 
-    this.handlers = createHandlers({ ...deps, sendReply, bot: this.bot });
+    const sendTyping = async (chatId: number) => {
+      await this.bot.sendChatAction(chatId, "typing");
+    };
+
+    const sendStreamingMessage = async (chatId: number, text: string): Promise<number> => {
+      const msg = await this.bot.sendMessage(chatId, text);
+      return msg.message_id;
+    };
+
+    const editMessage = async (chatId: number, messageId: number, text: string): Promise<void> => {
+      try {
+        await this.bot.editMessageText(text, { chat_id: chatId, message_id: messageId });
+      } catch {
+        // Telegram throws if the text hasn't changed — ignore silently
+      }
+    };
+
+    this.handlers = createHandlers({ ...deps, sendReply, sendTyping, sendStreamingMessage, editMessage, bot: this.bot });
     this.registerHandlers();
   }
 

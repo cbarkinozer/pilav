@@ -55,9 +55,15 @@ function isMutating(toolName: string): boolean {
 	return ["write_file", "edit_file", "bash", "git_add", "git_commit", "search_web"].includes(toolName);
 }
 
+export const TOOL_RESULT_MAX_CHARS = 8000;
+
+export function truncateToolResult(content: Array<{ type?: string; text?: string; [key: string]: unknown }>): string {
+	const text = content.map((c) => c.text ?? "").join("\n").trim();
+	if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
+	const omitted = text.length - TOOL_RESULT_MAX_CHARS;
+	return text.slice(0, TOOL_RESULT_MAX_CHARS) + `\n[truncated — ${omitted} chars omitted]`;
+}
+
 function formatResult(result: ToolResult): string {
-	return result.content
-		.map((c) => (c.text ?? ""))
-		.join("\n")
-		.trim();
+	return truncateToolResult(result.content);
 }

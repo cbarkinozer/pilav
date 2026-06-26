@@ -66,6 +66,34 @@ export class PiSession {
     return textBuffer;
   }
 
+  /**
+   * Send a prompt and stream text deltas to onChunk as they arrive.
+   * Returns the full accumulated response text when done.
+   * Uses prompt()+onEvent()+waitForIdle() so the caller gets updates mid-generation.
+   */
+  async sendMessageStreaming(
+    text: string,
+    onChunk?: (accumulatedText: string) => void,
+  ): Promise<string> {
+    let textBuffer = "";
+    const unsubscribe = this.client.onEvent((event: AgentEvent) => {
+      if (event.type === "message_update") {
+        const ev = event as any;
+        if (ev.assistantMessageEvent?.type === "text_delta") {
+          textBuffer += ev.assistantMessageEvent.delta;
+          onChunk?.(textBuffer);
+        }
+      }
+    });
+    try {
+      await this.client.prompt(text);
+      await this.client.waitForIdle(120_000);
+    } finally {
+      unsubscribe();
+    }
+    return textBuffer;
+  }
+
   async cancel(): Promise<void> {
     await this.client.abort();
   }
