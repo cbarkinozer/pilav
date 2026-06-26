@@ -133,7 +133,7 @@ export function createHandlers(deps: HandlerDeps) {
             const response = deps.lmChatFn
               ? await deps.lmChatFn(chatId, text)
               : await getChatSession(chatId).chat(text);
-            await replyChunked(chatId, response || "(no response)");
+            await replyChunked(chatId, response || "I didn't get a response from the model. Try rephrasing.");
           } catch (err) {
             console.error("[pilav-gateway] LM Studio chat error:", (err as Error).message);
             await sendReply(chatId, `Sorry, model error: ${(err as Error).message.slice(0, 200)}`);

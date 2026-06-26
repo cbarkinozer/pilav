@@ -73,9 +73,8 @@ export class LMStudioChat {
 			model: this.model,
 			messages,
 			temperature: 0.6,
-			max_tokens: enableThinking ? 8192 : 1024,
-			// Qwen 3.5 thinking control via LM Studio chat template parameter
-			chat_template_kwargs: { enable_thinking: enableThinking },
+			// 4096 gives thinking room + actual response; Qwen at 20 tps = ~3 min max
+			max_tokens: 4096,
 		};
 
 		const resp = await this.fetchFn(`${this.baseUrl}/v1/chat/completions`, {
