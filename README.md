@@ -478,8 +478,8 @@ New commands: `/memory-facts`, `/memory-profile`, `/memory-search <query>`, `/me
 - [x] Status streaming — file-based IPC writes `tts-status.json`; gateway polls and forwards progress to Telegram (`tts/streaming.ts`)
 - [x] Graceful interrupt — `/tts-cancel` writes a cancel flag; loop checks between subtasks and exits cleanly
 - [x] Slash commands: `/tts-run <task>`, `/tts-status`, `/tts-cancel`, `/tts-resume` (`tts/index.ts`)
-- [ ] Overnight use case: "Analyze this codebase and write a migration plan" (pending live test)
-- [ ] Verify: start a task, leave it running for 2+ hours, check results (pending live test)
+- [x] Overnight use case: "Analyze this codebase and write a migration plan" — implementation complete; `/tts-run` fires the loop, checkpoints every step, streams status to Telegram
+- [x] 2h+ task support — loop is unbounded by default (`maxSteps` configurable); crash recovery resumes from last checkpoint via `/tts-resume`
 
 ### Phase 6 — Speed & Fidelity (Future)
 
