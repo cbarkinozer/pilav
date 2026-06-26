@@ -59,6 +59,13 @@ export class SessionRouter {
     await Promise.all(ids.map((id) => this.stop(id)));
   }
 
+  getIfExists(chatId: number): PiSession | null {
+    const entry = this.sessions.get(chatId);
+    if (!entry) return null;
+    this.resetTimer(chatId, entry);
+    return entry.session;
+  }
+
   activeChatIds(): number[] {
     return [...this.sessions.keys()];
   }

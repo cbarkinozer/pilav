@@ -35,7 +35,7 @@ function getChatSession(chatId: number): LMStudioChat {
 }
 
 export interface HandlerDeps {
-  router: Pick<SessionRouter, "getOrCreate">;
+  router: Pick<SessionRouter, "getOrCreate" | "getIfExists">;
   queue: Pick<UserQueue, "enqueue">;
   sendReply: (chatId: number, text: string) => Promise<void>;
   sendTyping?: (chatId: number) => Promise<void>;
@@ -108,39 +108,48 @@ export function createHandlers(deps: HandlerDeps) {
     await queue.enqueue(userId, async () => {
       const typingTimer = startTypingInterval(chatId);
       try {
-        if (isTaskRequest(text)) {
+        const isTask = isTaskRequest(text);
+        console.log(`[pilav] chat=${chatId} isTask=${isTask} msg="${text.slice(0, 60)}"`);
+
+        if (isTask) {
           // Task request → route through Pi session (TTS loop / coding agent)
-          const session = await router.getOrCreate(chatId);
+          try {
+            const session = await router.getOrCreate(chatId);
+            console.log(`[pilav] Pi session started for chat=${chatId}`);
 
-          if (deps.sendStreamingMessage && deps.editMessage && "sendMessageStreaming" in session) {
-            const thinkingId = await deps.sendStreamingMessage(chatId, "⏳ Working on it…");
-            let lastEdit = Date.now();
-            const EDIT_INTERVAL_MS = 2000;
+            if (deps.sendStreamingMessage && deps.editMessage && "sendMessageStreaming" in session) {
+              const thinkingId = await deps.sendStreamingMessage(chatId, "⏳ Working on it…");
+              let lastEdit = Date.now();
+              const EDIT_INTERVAL_MS = 2000;
 
-            const response = await (session as any).sendMessageStreaming(
-              text,
-              async (accumulated: string) => {
-                const now = Date.now();
-                if (now - lastEdit >= EDIT_INTERVAL_MS) {
-                  lastEdit = now;
-                  const preview = accumulated.slice(-TELEGRAM_MAX_LENGTH);
-                  await deps.editMessage!(chatId, thinkingId, preview || "⏳ Working on it…");
+              const response = await (session as any).sendMessageStreaming(
+                text,
+                async (accumulated: string) => {
+                  const now = Date.now();
+                  if (now - lastEdit >= EDIT_INTERVAL_MS) {
+                    lastEdit = now;
+                    const preview = accumulated.slice(-TELEGRAM_MAX_LENGTH);
+                    await deps.editMessage!(chatId, thinkingId, preview || "⏳ Working on it…");
+                  }
+                },
+              );
+
+              const final = response || "(no response)";
+              if (final.length <= TELEGRAM_MAX_LENGTH) {
+                await deps.editMessage!(chatId, thinkingId, final);
+              } else {
+                await deps.editMessage!(chatId, thinkingId, final.slice(0, TELEGRAM_MAX_LENGTH));
+                for (const chunk of splitMessage(final.slice(TELEGRAM_MAX_LENGTH))) {
+                  await sendReply(chatId, chunk);
                 }
-              },
-            );
-
-            const final = response || "(no response)";
-            if (final.length <= TELEGRAM_MAX_LENGTH) {
-              await deps.editMessage!(chatId, thinkingId, final);
-            } else {
-              await deps.editMessage!(chatId, thinkingId, final.slice(0, TELEGRAM_MAX_LENGTH));
-              for (const chunk of splitMessage(final.slice(TELEGRAM_MAX_LENGTH))) {
-                await sendReply(chatId, chunk);
               }
+            } else {
+              const response = await session.sendMessage(text);
+              await replyChunked(chatId, response || "(no response)");
             }
-          } else {
-            const response = await session.sendMessage(text);
-            await replyChunked(chatId, response || "(no response)");
+          } catch (piErr) {
+            console.error("[pilav] Pi session error:", (piErr as Error).message);
+            await sendReply(chatId, `Pi agent error: ${(piErr as Error).message.slice(0, 200)}`);
           }
         } else {
           // Casual chat → direct Qwen via LM Studio with streaming + thinking blocks
@@ -202,12 +211,20 @@ export function createHandlers(deps: HandlerDeps) {
       return;
     }
 
-    const session = await router.getOrCreate(chatId);
-    const status = await session.getStatus();
+    const session = router.getIfExists(chatId);
+    if (!session) {
+      await sendReply(chatId, "Pi: no active session\nRouting: casual → LM Studio | task keywords → Pi agent");
+      return;
+    }
 
-    const modelStr = status.model ? `${status.model.provider}/${status.model.id}` : "unknown";
-    const streamingStr = status.isStreaming ? "streaming" : "idle";
-    await sendReply(chatId, `Status: ${streamingStr}\nModel: ${modelStr}\nSession: ${status.sessionId}`);
+    try {
+      const status = await session.getStatus();
+      const modelStr = status.model ? `${status.model.provider}/${status.model.id}` : "unknown";
+      const streamingStr = status.isStreaming ? "streaming" : "idle";
+      await sendReply(chatId, `Pi: ${streamingStr}\nModel: ${modelStr}\nSession: ${status.sessionId}`);
+    } catch (err) {
+      await sendReply(chatId, `Pi: error getting status — ${(err as Error).message.slice(0, 100)}`);
+    }
   }
 
   async function onCancel(msg: TgMessage): Promise<void> {

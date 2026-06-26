@@ -15,11 +15,18 @@ async function main(): Promise<void> {
   }
 
   const queue = new UserQueue();
+  // Project root: pilav/ — Pi auto-discovers .pi/extensions/ from here
+  const pilavRoot = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
   const router = new SessionRouter({
     sessionFactory: () =>
       new PiSession({
         piCliPath: config.piCliPath,
-        piArgs: [],
+        cwd: pilavRoot,
+        // RpcClient prepends --mode rpc automatically; we just pick provider + model
+        piArgs: [
+          "--provider", "lmstudio",
+          "--model", "qwen-3.5-8b",
+        ],
       }),
     timeoutMs: config.sessionTimeoutMs,
   });
