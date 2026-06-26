@@ -104,8 +104,8 @@ export function createHandlers(deps: HandlerDeps) {
     const text = msg.text ?? "";
     if (!text) return;
 
-    // /pi <task> — explicit Pi agent invocation (skip the / filter for this command)
-    const isPiCommand = text.startsWith("/pi ");
+    // /pilav <task> — explicit Pi agent invocation
+    const isPiCommand = text.startsWith("/pilav ");
     if (text.startsWith("/") && !isPiCommand) return;
 
     void sendTyping(chatId);
@@ -113,7 +113,7 @@ export function createHandlers(deps: HandlerDeps) {
       const typingTimer = startTypingInterval(chatId);
       try {
         if (isPiCommand) {
-          const task = text.slice(4).trim();
+          const task = text.slice(8).trim(); // strip "/pilav "
           console.log(`[pilav] chat=${chatId} route=Pi task="${task.slice(0, 80)}"`);
           try {
             const session = await router.getOrCreate(chatId);
@@ -202,7 +202,7 @@ export function createHandlers(deps: HandlerDeps) {
 
   async function onStart(msg: TgMessage): Promise<void> {
     const chatId = msg.chat.id;
-    await sendReply(chatId, "Hello! I'm Pilav — your always-on AI assistant. Send me a message to get started.");
+    await sendReply(chatId, "Hello! I'm Pilav — your always-on AI assistant.\n\nJust chat with me for questions, code help, or anything else.\n\nUse /pilav <task> to run Pi agent on your computer — file edits, repo work, shell commands.\n\nOther commands: /status /cancel");
   }
 
   async function onStatus(msg: TgMessage): Promise<void> {
@@ -216,7 +216,7 @@ export function createHandlers(deps: HandlerDeps) {
 
     const session = router.getIfExists(chatId);
     if (!session) {
-      await sendReply(chatId, "Pi: no active session\nRouting: casual → LM Studio | task keywords → Pi agent");
+      await sendReply(chatId, "Pi: no active session\nChat goes to LM Studio. Use /pilav <task> to invoke Pi agent.");
       return;
     }
 
@@ -377,7 +377,9 @@ export class TelegramGateway {
     this.bot.onText(/\/status/, (msg) => this.handlers.onStatus(msg as TgMessage));
     this.bot.onText(/\/cancel/, (msg) => this.handlers.onCancel(msg as TgMessage));
     this.bot.on("message", (msg) => {
-      if (!msg.text?.startsWith("/")) {
+      const text = msg.text ?? "";
+      // Pass through normal messages AND /pilav commands; drop all other slash commands
+      if (!text.startsWith("/") || text.startsWith("/pilav ")) {
         this.handlers.onMessage(msg as TgMessage);
       }
     });
