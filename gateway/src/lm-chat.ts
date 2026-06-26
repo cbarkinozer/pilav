@@ -87,8 +87,9 @@ export class LMStudioChat {
 		const data = await resp.json() as { choices: Array<{ message: { content: string } }> };
 		const reply = data.choices?.[0]?.message?.content ?? "(no response)";
 
-		// Strip <think>...</think> tags from the reply before storing in history
-		const cleanReply = reply.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+		// Strip <think>...</think> tags — if nothing remains, fall back to raw reply
+		const stripped = reply.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+		const cleanReply = stripped || reply.trim() || "(no response)";
 
 		this.history.push({ role: "user", content: userMessage });
 		this.history.push({ role: "assistant", content: cleanReply });

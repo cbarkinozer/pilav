@@ -132,7 +132,7 @@ export function createHandlers(deps: HandlerDeps) {
           const response = deps.lmChatFn
             ? await deps.lmChatFn(chatId, text)
             : await getChatSession(chatId).chat(text);
-          await replyChunked(chatId, response);
+          await replyChunked(chatId, response || "(no response)");
         }
       } finally {
         clearInterval(typingTimer);
