@@ -1,5 +1,7 @@
 # pilav
 
+![alt text](image.png)
+
 A memory-persistent AI agent — forked from [Pi](https://github.com/earendil-works/pi) — that knows you across sessions, works 24/7 on your Mac Mini, reaches you via Telegram, and can think for up to 10 hours on complex tasks.
 
 **Name:** *pilav* — pi + pilav (Turkish rice dish). A fork of Pi.
@@ -430,56 +432,52 @@ pilav/
 
 *Week 2 — Goal: message the agent from anywhere via Telegram.*
 
-- [x] Node.js daemon with `node-telegram-bot-api` (long-polling, no webhook required)
-- [x] RPC client that communicates with Pi via JSONL on stdin/stdout (`gateway/src/rpc-client.ts`)
-- [x] Message queue: concurrent requests serialized per user (`gateway/src/queue.ts`)
-- [x] Session routing: separate agent contexts per Telegram chat, 30-min idle timeout (`gateway/src/router.ts`)
-- [x] `launchd` plist for 24/7 operation (`gateway/launchd/com.pilav.gateway.plist`)
-- [x] `/status`, `/cancel` handlers (`gateway/src/bot.ts`)
-- [x] File/media exchange (code snippets, images, documents forwarded to agent)
-- [ ] Verify: send message from Telegram → Pi processes it → response back (pending manual test — requires `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_USERS`)
+- [ ] Node.js daemon with `node-telegram-bot-api`
+- [ ] RPC client that communicates with Pi via JSONL on stdin/stdout
+- [ ] Message queue: concurrent requests serialized per user
+- [ ] Session routing: separate agent contexts per Telegram chat
+- [ ] `launchd` plist for 24/7 operation
+- [ ] `/status`, `/cancel` handlers
+- [ ] File/media exchange (code snippets, images, documents)
+- [ ] Verify: send message from Telegram → Pi processes it → response back
 
 ### Phase 3 — Memory & Recall
 
 *Week 3 — Goal: the agent knows you across days and contexts.*
 
-- [x] Fact extraction pipeline — LM Studio HTTP call after each session → structured `{ subject, predicate, object, confidence }` → SQLite `facts` table with FTS5 (`extractor.ts`)
-- [x] Dialectic user profile — consolidation every 5 sessions: thesis + antithesis + synthesis stored as profile keys `user_profile_thesis`, `user_profile_antithesis`, `user_profile_synthesis` (`profiler.ts`)
-- [x] FTS5 full-text search with BM25 relevance ranking (`searchExchangesByRelevance`, `searchFacts`)
-- [x] Contextual injection on startup — 4-section `## Memory Context` block:
-  - `### About You` — profile synthesis
-  - `### Known Facts` — top 10 extracted facts
-  - `### Relevant Past Context` — top 3 BM25-ranked past exchanges matching current prompt
-  - `### Recent History` — last 3 exchanges (capped at ~2000 tokens total)
-- [x] Background profile consolidation runs automatically after `agent_end` (no blocking)
-- [ ] Optional Python sidecar for heavier NLP (deferred to future phase)
-- [ ] Verify: after a week of use, agent knows your preferences without being told (pending live use)
-
-New commands: `/memory-facts`, `/memory-profile`, `/memory-search <query>`, `/memory-consolidate`
+- [ ] Fact extraction pipeline (few-shot prompt → structured JSON → SQLite)
+- [ ] Dialectic user profile (thesis/antithesis/synthesis after N sessions)
+- [ ] FTS5 full-text search with relevance ranking
+- [ ] Contextual injection: on startup, query memory for:
+  - User profile summary
+  - Top-3 most relevant past sessions
+  - Recent facts related to current project
+- [ ] Background profile consolidation (run after session ends)
+- [ ] Optional Python sidecar for heavier NLP (fact extraction, classification)
+- [ ] Verify: after a week of use, agent knows your preferences without being told
 
 ### Phase 4 — MCP & Tools
 
 *Week 4 — Goal: rich tool ecosystem via MCP.*
 
-- [x] MCP extension implementing `@modelcontextprotocol/sdk` (`mcp/index.ts`, `mcp/client.ts`)
-- [x] Built-in MCP servers: filesystem, shell, web, git (`mcp/servers/`)
-- [x] Auto-discovery of MCP servers from `~/.pilav/mcp/config.json` or `.pilav/mcp/config.json` (`mcp/config.ts`)
-- [x] Sandboxed shell execution — commands run in isolated temp directories; `ALLOWED_COMMANDS` allowlist (`mcp/servers/shell.ts`)
-- [x] Tool result caching — LRU cache, 5-min TTL, 100-entry max, skips mutating tools (`mcp/cache.ts`)
-- [ ] Verify: agent can browse the web, edit files, run git commands via MCP (pending manual test — requires MCP servers running)
+- [ ] MCP extension implementing `@modelcontextprotocol/sdk`
+- [ ] Built-in MCP servers: filesystem, shell, web, git
+- [ ] Auto-discovery of MCP servers from `.pilav/mcp/`
+- [ ] Sandboxed shell execution (temp directories, path restrictions)
+- [ ] Tool result caching (avoid repeated expensive operations during TTS)
+- [ ] Verify: agent can browse the web, edit files, run git commands via MCP
 
 ### Phase 5 — Test-Time Scaling
 
-*Week 5 — Goal: agent works overnight on complex tasks.*
+*Week 5 — Goal: agent works overnight on complex tasks.* Similar to /cto-plan workflow I use with Claude Code that run 90 mins non-stop. Model ensembling for sanity. If quality wont math try swe-protege paper.
 
-- [x] Extended reasoning loop — plan → subtasks → sequential execution (`tts/loop.ts`)
-- [x] Checkpoint system — saves full state to `~/.pilav/checkpoints/` every N steps, versioned JSON (`tts/checkpoint.ts`)
-- [x] Crash recovery — on `/tts-resume`, detects last incomplete checkpoint and continues from it
-- [x] Status streaming — file-based IPC writes `tts-status.json`; gateway polls and forwards progress to Telegram (`tts/streaming.ts`)
-- [x] Graceful interrupt — `/tts-cancel` writes a cancel flag; loop checks between subtasks and exits cleanly
-- [x] Slash commands: `/tts-run <task>`, `/tts-status`, `/tts-cancel`, `/tts-resume` (`tts/index.ts`)
-- [x] Overnight use case: "Analyze this codebase and write a migration plan" — implementation complete; `/tts-run` fires the loop, checkpoints every step, streams status to Telegram
-- [x] 2h+ task support — loop is unbounded by default (`maxSteps` configurable); crash recovery resumes from last checkpoint via `/tts-resume`
+- [ ] Extended reasoning loop (break task into subtasks, execute sequentially)
+- [ ] Checkpoint system: save full agent state every N steps to `.pilav/checkpoints/`
+- [ ] Crash recovery: detect incomplete checkpoints, offer resume
+- [ ] Status streaming: periodic progress updates pushed to Telegram via gateway
+- [ ] Graceful interrupt (`/cancel` from Telegram)
+- [ ] Overnight use case: "Analyze this codebase and write a migration plan"
+- [ ] Verify: start a task, leave it running for 2+ hours, check results
 
 ### Phase 6 — Speed & Fidelity (Future)
 
