@@ -39,6 +39,8 @@ function makeMockDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps & { rep
     queue: mockQueue as any,
     sendReply: mockReply,
     allowedUsers: [100, 200],
+    // Stub LM Studio chat so tests don't hit real HTTP
+    lmChatFn: async (_chatId: number, _text: string) => "lm reply",
     ...overrides,
     replies,
   } as any;
@@ -54,11 +56,11 @@ function makeMsg(chatId: number, userId: number, text: string) {
 }
 
 describe("T006: Bot handlers", () => {
-  it("routes text messages from allowed users to the session", async () => {
+  it("routes task messages from allowed users to the Pi session", async () => {
     const deps = makeMockDeps();
     const { onMessage } = createHandlers(deps);
 
-    await onMessage(makeMsg(100, 100, "Hello agent!"));
+    await onMessage(makeMsg(100, 100, "build me a REST API in TypeScript"));
 
     expect(deps.router.getOrCreate).toHaveBeenCalledWith(100);
     expect(deps.queue.enqueue).toHaveBeenCalled();
@@ -75,12 +77,14 @@ describe("T006: Bot handlers", () => {
   });
 
   it("allows all users when allowedUsers is empty", async () => {
-    const deps = makeMockDeps({ allowedUsers: [] } as any);
+    const lmChatFn = vi.fn().mockResolvedValue("hi there");
+    const deps = makeMockDeps({ allowedUsers: [], lmChatFn } as any);
     const { onMessage } = createHandlers(deps);
 
     await onMessage(makeMsg(999, 999, "Hello"));
 
-    expect(deps.router.getOrCreate).toHaveBeenCalled();
+    // Casual message goes to LM Studio, not the Pi session
+    expect(lmChatFn).toHaveBeenCalled();
   });
 
   it("/start replies with welcome message", async () => {
@@ -128,7 +132,7 @@ describe("T006: Bot handlers", () => {
     } as any);
     const { onMessage } = createHandlers(deps);
 
-    await onMessage(makeMsg(100, 100, "Long question"));
+    await onMessage(makeMsg(100, 100, "build me a very long response please implement everything"));
 
     // All replies should be within Telegram message size limit
     for (const reply of deps.replies) {

@@ -5,6 +5,19 @@ import { pipeline } from "node:stream/promises";
 import TelegramBot from "node-telegram-bot-api";
 import type { UserQueue } from "./queue.ts";
 import type { SessionRouter } from "./router.ts";
+import { LMStudioChat, isTaskRequest } from "./lm-chat.ts";
+
+// One LMStudioChat instance per chat ID for conversation history
+const chatSessions = new Map<number, LMStudioChat>();
+
+function getChatSession(chatId: number): LMStudioChat {
+  let session = chatSessions.get(chatId);
+  if (!session) {
+    session = new LMStudioChat();
+    chatSessions.set(chatId, session);
+  }
+  return session;
+}
 
 export interface HandlerDeps {
   router: Pick<SessionRouter, "getOrCreate">;
@@ -17,6 +30,8 @@ export interface HandlerDeps {
   editMessage?: (chatId: number, messageId: number, text: string) => Promise<void>;
   allowedUsers: number[];
   bot?: TelegramBot;
+  /** Override the LM Studio chat function for testing. Receives (chatId, text). */
+  lmChatFn?: (chatId: number, text: string) => Promise<string>;
 }
 
 type TgMessage = {
@@ -78,40 +93,46 @@ export function createHandlers(deps: HandlerDeps) {
     await queue.enqueue(userId, async () => {
       const typingTimer = startTypingInterval(chatId);
       try {
-        const session = await router.getOrCreate(chatId);
+        if (isTaskRequest(text)) {
+          // Task request → route through Pi session (TTS loop / coding agent)
+          const session = await router.getOrCreate(chatId);
 
-        if (deps.sendStreamingMessage && deps.editMessage && "sendMessageStreaming" in session) {
-          // Streaming path: send Thinking..., then edit-in-place as tokens arrive
-          const thinkingId = await deps.sendStreamingMessage(chatId, "⏳ Thinking…");
-          let lastEdit = Date.now();
-          const EDIT_INTERVAL_MS = 2000;
+          if (deps.sendStreamingMessage && deps.editMessage && "sendMessageStreaming" in session) {
+            const thinkingId = await deps.sendStreamingMessage(chatId, "⏳ Working on it…");
+            let lastEdit = Date.now();
+            const EDIT_INTERVAL_MS = 2000;
 
-          const response = await (session as any).sendMessageStreaming(
-            text,
-            async (accumulated: string) => {
-              const now = Date.now();
-              if (now - lastEdit >= EDIT_INTERVAL_MS) {
-                lastEdit = now;
-                const preview = accumulated.slice(-TELEGRAM_MAX_LENGTH);
-                await deps.editMessage!(chatId, thinkingId, preview || "⏳ Thinking…");
+            const response = await (session as any).sendMessageStreaming(
+              text,
+              async (accumulated: string) => {
+                const now = Date.now();
+                if (now - lastEdit >= EDIT_INTERVAL_MS) {
+                  lastEdit = now;
+                  const preview = accumulated.slice(-TELEGRAM_MAX_LENGTH);
+                  await deps.editMessage!(chatId, thinkingId, preview || "⏳ Working on it…");
+                }
+              },
+            );
+
+            const final = response || "(no response)";
+            if (final.length <= TELEGRAM_MAX_LENGTH) {
+              await deps.editMessage!(chatId, thinkingId, final);
+            } else {
+              await deps.editMessage!(chatId, thinkingId, final.slice(0, TELEGRAM_MAX_LENGTH));
+              for (const chunk of splitMessage(final.slice(TELEGRAM_MAX_LENGTH))) {
+                await sendReply(chatId, chunk);
               }
-            },
-          );
-
-          const final = response || "(no response)";
-          if (final.length <= TELEGRAM_MAX_LENGTH) {
-            await deps.editMessage!(chatId, thinkingId, final);
-          } else {
-            // Response too long for a single edit — replace thinking msg with first chunk, send rest
-            await deps.editMessage!(chatId, thinkingId, final.slice(0, TELEGRAM_MAX_LENGTH));
-            for (const chunk of splitMessage(final.slice(TELEGRAM_MAX_LENGTH))) {
-              await sendReply(chatId, chunk);
             }
+          } else {
+            const response = await session.sendMessage(text);
+            await replyChunked(chatId, response || "(no response)");
           }
         } else {
-          // Fallback: wait-then-send (original behaviour)
-          const response = await session.sendMessage(text);
-          await replyChunked(chatId, response || "(no response)");
+          // Casual chat → direct Qwen via LM Studio (fast, no-think by default)
+          const response = deps.lmChatFn
+            ? await deps.lmChatFn(chatId, text)
+            : await getChatSession(chatId).chat(text);
+          await replyChunked(chatId, response);
         }
       } finally {
         clearInterval(typingTimer);

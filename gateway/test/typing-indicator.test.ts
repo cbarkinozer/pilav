@@ -33,13 +33,14 @@ function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps & {
     sendReply: vi.fn(async (_chatId: number, text: string) => { replies.push(text); }),
     sendTyping: vi.fn(async (chatId: number) => { typingCalls.push(Date.now()); }),
     allowedUsers: [1],
+    lmChatFn: async () => "lm reply",
     ...overrides,
     replies,
     typingCalls,
   } as any;
 }
 
-function makeMsg(text = "hello") {
+function makeMsg(text = "build me a REST API") {
   return { chat: { id: 1 }, from: { id: 1 }, text, message_id: 1 };
 }
 

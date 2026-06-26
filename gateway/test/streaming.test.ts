@@ -110,15 +110,17 @@ describe("T004: Bot streaming response", () => {
         editedMessages.push(text);
       }),
       allowedUsers: [1],
+      lmChatFn: async () => "lm reply",
       replies: sentMessages,
       edits: editedMessages,
     } as any;
 
     const { onMessage } = createHandlers(deps);
-    await onMessage({ chat: { id: 1 }, from: { id: 1 }, text: "hello", message_id: 1 });
+    // Use a task request so it routes to the Pi session, not LM Studio
+    await onMessage({ chat: { id: 1 }, from: { id: 1 }, text: "build me a REST API", message_id: 1 });
 
-    // Should have sent an initial "Thinking..." message
-    expect(sentMessages.some((m) => /thinking/i.test(m))).toBe(true);
+    // Should have sent an initial "Working on it..." message
+    expect(sentMessages.some((m) => /thinking|working/i.test(m))).toBe(true);
   });
 
   it("falls back to sendMessage if sendStreamingMessage is not provided", async () => {
@@ -136,10 +138,12 @@ describe("T004: Bot streaming response", () => {
       sendReply: vi.fn(async (_chatId: number, text: string) => { replies.push(text); }),
       sendTyping: vi.fn(async () => {}),
       allowedUsers: [1],
+      lmChatFn: async () => "lm reply",
     };
 
     const { onMessage } = createHandlers(deps);
-    await onMessage({ chat: { id: 1 }, from: { id: 1 }, text: "hello", message_id: 1 });
+    // Use a task request to route to the Pi session
+    await onMessage({ chat: { id: 1 }, from: { id: 1 }, text: "build me a todo app", message_id: 1 });
 
     expect(replies).toContain("plain response");
   });
