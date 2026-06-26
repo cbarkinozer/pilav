@@ -5,7 +5,7 @@ import { pipeline } from "node:stream/promises";
 import TelegramBot from "node-telegram-bot-api";
 import type { UserQueue } from "./queue.ts";
 import type { SessionRouter } from "./router.ts";
-import { LMStudioChat, isTaskRequest } from "./lm-chat.ts";
+import { LMStudioChat } from "./lm-chat.ts";
 
 /**
  * Convert CommonMark-style markdown (from LLMs) to Telegram Markdown.
@@ -102,34 +102,36 @@ export function createHandlers(deps: HandlerDeps) {
     }
 
     const text = msg.text ?? "";
-    if (!text || text.startsWith("/")) return;
+    if (!text) return;
+
+    // /pi <task> — explicit Pi agent invocation (skip the / filter for this command)
+    const isPiCommand = text.startsWith("/pi ");
+    if (text.startsWith("/") && !isPiCommand) return;
 
     void sendTyping(chatId);
     await queue.enqueue(userId, async () => {
       const typingTimer = startTypingInterval(chatId);
       try {
-        const isTask = isTaskRequest(text);
-        console.log(`[pilav] chat=${chatId} isTask=${isTask} msg="${text.slice(0, 60)}"`);
-
-        if (isTask) {
-          // Task request → route through Pi session (TTS loop / coding agent)
+        if (isPiCommand) {
+          const task = text.slice(4).trim();
+          console.log(`[pilav] chat=${chatId} route=Pi task="${task.slice(0, 80)}"`);
           try {
             const session = await router.getOrCreate(chatId);
-            console.log(`[pilav] Pi session started for chat=${chatId}`);
+            console.log(`[pilav] Pi session ready for chat=${chatId}`);
 
             if (deps.sendStreamingMessage && deps.editMessage && "sendMessageStreaming" in session) {
-              const thinkingId = await deps.sendStreamingMessage(chatId, "⏳ Working on it…");
+              const thinkingId = await deps.sendStreamingMessage(chatId, "⏳ Pi is working on it…");
               let lastEdit = Date.now();
               const EDIT_INTERVAL_MS = 2000;
 
               const response = await (session as any).sendMessageStreaming(
-                text,
+                task,
                 async (accumulated: string) => {
                   const now = Date.now();
                   if (now - lastEdit >= EDIT_INTERVAL_MS) {
                     lastEdit = now;
                     const preview = accumulated.slice(-TELEGRAM_MAX_LENGTH);
-                    await deps.editMessage!(chatId, thinkingId, preview || "⏳ Working on it…");
+                    await deps.editMessage!(chatId, thinkingId, preview || "⏳ Pi is working on it…");
                   }
                 },
               );
@@ -144,7 +146,7 @@ export function createHandlers(deps: HandlerDeps) {
                 }
               }
             } else {
-              const response = await session.sendMessage(text);
+              const response = await session.sendMessage(task);
               await replyChunked(chatId, response || "(no response)");
             }
           } catch (piErr) {
@@ -152,7 +154,8 @@ export function createHandlers(deps: HandlerDeps) {
             await sendReply(chatId, `Pi agent error: ${(piErr as Error).message.slice(0, 200)}`);
           }
         } else {
-          // Casual chat → direct Qwen via LM Studio with streaming + thinking blocks
+          // Everything else → LM Studio (fast, streaming, casual + code questions)
+          console.log(`[pilav] chat=${chatId} route=LMStudio msg="${text.slice(0, 60)}"`);
           try {
             if (deps.lmChatFn) {
               // Test path: no streaming
