@@ -290,6 +290,10 @@ export class TelegramGateway {
     void this.bot.sendMessage(chatId, text).catch(() => {});
   }
 
+  sendPhoto(chatId: number, filePath: string, caption?: string): void {
+    void this.bot.sendPhoto(chatId, filePath, { caption }).catch(() => {});
+  }
+
   async stop(): Promise<void> {
     await this.bot.stopPolling();
   }

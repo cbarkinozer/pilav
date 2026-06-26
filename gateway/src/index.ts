@@ -29,6 +29,7 @@ async function main(): Promise<void> {
   const poller = new StatusPoller({
     getChatIds: () => router.activeChatIds(),
     sendMessage: async (chatId, text) => { gateway.sendMessage(chatId, text); },
+    sendPhoto: async (chatId, filePath, caption) => { gateway.sendPhoto(chatId, filePath, caption); },
   });
   poller.start();
 

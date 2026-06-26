@@ -16,6 +16,7 @@ export interface StatusPollerOptions {
 	pilav_dir?: string;
 	getChatIds: () => number[];
 	sendMessage: (chatId: number, text: string) => Promise<void>;
+	sendPhoto?: (chatId: number, filePath: string, caption?: string) => Promise<void>;
 	interval_ms?: number;
 }
 
@@ -30,6 +31,7 @@ export class StatusPoller {
 	private dir: string;
 	private getChatIds: () => number[];
 	private sendMessage: (chatId: number, text: string) => Promise<void>;
+	sendPhoto?: (chatId: number, filePath: string, caption?: string) => Promise<void>;
 	private intervalMs: number;
 	private timer?: ReturnType<typeof setInterval>;
 	private lastKey: string | null = null;
@@ -39,6 +41,7 @@ export class StatusPoller {
 		this.dir = opts.pilav_dir ?? join(homedir(), ".pilav");
 		this.getChatIds = opts.getChatIds;
 		this.sendMessage = opts.sendMessage;
+		this.sendPhoto = opts.sendPhoto;
 		this.intervalMs = opts.interval_ms ?? 60_000;
 	}
 

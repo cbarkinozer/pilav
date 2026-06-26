@@ -15,6 +15,10 @@ export interface TtsOptions {
 	resumeFrom?: string;
 	expertFn?: (question: string) => Promise<string>;
 	logDir?: string;
+	/** Called when a subtask is detected as a UI/browser task. Returns result text + optional proof screenshot path. */
+	computerUseFn?: (task: string) => Promise<{ result: string; screenshotPath?: string }>;
+	/** Called after a computer use step completes — use to send proof screenshots to Telegram. */
+	onProofScreenshot?: (screenshotPath: string, caption: string) => Promise<void>;
 }
 
 export interface TtsResult {
@@ -49,6 +53,8 @@ export async function runTtsLoop(task: string, options: TtsOptions, pi: PiLike):
 	const cxlDir = cancelDir(options);
 	const expertFn = options.expertFn;
 	const logDir = options.logDir;
+	const computerUseFn = options.computerUseFn;
+	const onProofScreenshot = options.onProofScreenshot;
 	const startTime = Date.now();
 
 	// Check cancel signal before we even start
@@ -108,6 +114,18 @@ export async function runTtsLoop(task: string, options: TtsOptions, pi: PiLike):
 
 		// Execute subtask with stuck detection and retry
 		pushStatus({ sessionId, step, totalSteps: subtasks.length + startStep, currentTask, elapsedMs: Date.now() - startTime, status: "working" }, statDir);
+
+		// Delegate UI/browser tasks to computer use loop
+		if (computerUseFn && isUiTask(currentTask)) {
+			try {
+				const cuResult = await computerUseFn(currentTask);
+				if (cuResult.screenshotPath && onProofScreenshot) {
+					await onProofScreenshot(cuResult.screenshotPath, `Step ${step}: ${currentTask}`);
+				}
+				results.push(`Step ${step}: ${cuResult.result}`);
+				continue;
+			} catch { /* fall through to normal LLM path */ }
+		}
 
 		const basePrompt = `Execute subtask ${step}/${subtasks.length + startStep}: ${currentTask}`;
 		let stepResult: string;
@@ -185,6 +203,17 @@ export async function runTtsLoop(task: string, options: TtsOptions, pi: PiLike):
 	}
 
 	return { status: "done", steps: subtasks.length + startStep, result: finalResult, checkpointPath: lastCheckpointPath };
+}
+
+const UI_TASK_KEYWORDS = [
+	"navigate", "click", "browse", "open browser", "visit", "go to",
+	"fill in", "fill out", "submit form", "screenshot", "take a screenshot",
+	"open website", "login to", "sign in to", "upload file to website",
+];
+
+function isUiTask(task: string): boolean {
+	const lower = task.toLowerCase();
+	return UI_TASK_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
 export function writeCancelSentinel(sessionId: string, dir?: string): void {
