@@ -44,7 +44,7 @@ describe("wrapWithThinkingMode", () => {
 });
 
 describe("LMStudioChat", () => {
-	it("uses no_think for short messages", async () => {
+	it("disables thinking for short messages via chat_template_kwargs", async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ choices: [{ message: { content: "Hello!" } }] }),
@@ -53,12 +53,11 @@ describe("LMStudioChat", () => {
 		const chat = new LMStudioChat({ fetch: fetchMock });
 		await chat.chat("hi");
 
-		const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { messages: Array<{ content: string }> };
-		const userMsg = body.messages.find((m) => m.content.includes("/no_think"));
-		expect(userMsg).toBeDefined();
+		const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { chat_template_kwargs: { enable_thinking: boolean } };
+		expect(body.chat_template_kwargs.enable_thinking).toBe(false);
 	});
 
-	it("uses think for task messages", async () => {
+	it("enables thinking for task messages via chat_template_kwargs", async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ choices: [{ message: { content: "Sure, here's the plan..." } }] }),
@@ -67,9 +66,8 @@ describe("LMStudioChat", () => {
 		const chat = new LMStudioChat({ fetch: fetchMock });
 		await chat.chat("build me a TypeScript REST API with authentication and database");
 
-		const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { messages: Array<{ content: string }> };
-		const userMsg = body.messages.find((m) => m.content.includes("/think"));
-		expect(userMsg).toBeDefined();
+		const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { chat_template_kwargs: { enable_thinking: boolean } };
+		expect(body.chat_template_kwargs.enable_thinking).toBe(true);
 	});
 
 	it("strips <think> tags from reply before storing in history", async () => {

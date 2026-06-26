@@ -1,6 +1,6 @@
 /**
  * Direct LM Studio chat client for Qwen.
- * Handles thinking mode toggle via /think and /no_think prefixes.
+ * Thinking mode is controlled via chat_template_kwargs, not text prefixes.
  * Used for casual chat — TTS loop handles long-running tasks.
  */
 
@@ -61,19 +61,21 @@ export class LMStudioChat {
 
 	async chat(userMessage: string, mode?: ThinkingMode): Promise<string> {
 		const effectiveMode = mode ?? detectThinkingMode(userMessage);
-		const wrappedMessage = wrapWithThinkingMode(userMessage, effectiveMode);
+		const enableThinking = effectiveMode === "think";
 
 		const messages: LMChatMessage[] = [
 			{ role: "system", content: "You are Pilav, a helpful AI assistant running on a Mac Mini. Be concise and direct. You can handle both quick questions and long coding projects." },
 			...this.history,
-			{ role: "user", content: wrappedMessage },
+			{ role: "user", content: userMessage },
 		];
 
 		const body = {
 			model: this.model,
 			messages,
 			temperature: 0.6,
-			max_tokens: effectiveMode === "think" ? 8192 : 1024,
+			max_tokens: enableThinking ? 8192 : 1024,
+			// Qwen 3.5 thinking control via LM Studio chat template parameter
+			chat_template_kwargs: { enable_thinking: enableThinking },
 		};
 
 		const resp = await this.fetchFn(`${this.baseUrl}/v1/chat/completions`, {
@@ -82,7 +84,10 @@ export class LMStudioChat {
 			body: JSON.stringify(body),
 		});
 
-		if (!resp.ok) throw new Error(`LM Studio error: ${resp.status}`);
+		if (!resp.ok) {
+			const detail = await resp.text().catch(() => "");
+			throw new Error(`LM Studio error ${resp.status}: ${detail.slice(0, 200)}`);
+		}
 
 		const data = await resp.json() as { choices: Array<{ message: { content: string } }> };
 		const reply = data.choices?.[0]?.message?.content ?? "(no response)";

@@ -129,10 +129,15 @@ export function createHandlers(deps: HandlerDeps) {
           }
         } else {
           // Casual chat → direct Qwen via LM Studio (fast, no-think by default)
-          const response = deps.lmChatFn
-            ? await deps.lmChatFn(chatId, text)
-            : await getChatSession(chatId).chat(text);
-          await replyChunked(chatId, response || "(no response)");
+          try {
+            const response = deps.lmChatFn
+              ? await deps.lmChatFn(chatId, text)
+              : await getChatSession(chatId).chat(text);
+            await replyChunked(chatId, response || "(no response)");
+          } catch (err) {
+            console.error("[pilav-gateway] LM Studio chat error:", (err as Error).message);
+            await sendReply(chatId, `Sorry, model error: ${(err as Error).message.slice(0, 200)}`);
+          }
         }
       } finally {
         clearInterval(typingTimer);
