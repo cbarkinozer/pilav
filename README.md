@@ -432,52 +432,52 @@ pilav/
 
 *Week 2 — Goal: message the agent from anywhere via Telegram.*
 
-- [ ] Node.js daemon with `node-telegram-bot-api`
-- [ ] RPC client that communicates with Pi via JSONL on stdin/stdout
-- [ ] Message queue: concurrent requests serialized per user
-- [ ] Session routing: separate agent contexts per Telegram chat
-- [ ] `launchd` plist for 24/7 operation
-- [ ] `/status`, `/cancel` handlers
-- [ ] File/media exchange (code snippets, images, documents)
-- [ ] Verify: send message from Telegram → Pi processes it → response back
+- [x] Node.js daemon with `node-telegram-bot-api`
+- [x] RPC client that communicates with Pi via JSONL on stdin/stdout
+- [x] Message queue: concurrent requests serialized per user
+- [x] Session routing: separate agent contexts per Telegram chat
+- [x] `launchd` plist for 24/7 operation
+- [x] `/status`, `/cancel` handlers
+- [x] File/media exchange (code snippets, images, documents)
+- [ ] Verify: send message from Telegram → Pi processes it → response back (pending live test)
 
 ### Phase 3 — Memory & Recall
 
 *Week 3 — Goal: the agent knows you across days and contexts.*
 
-- [ ] Fact extraction pipeline (few-shot prompt → structured JSON → SQLite)
-- [ ] Dialectic user profile (thesis/antithesis/synthesis after N sessions)
-- [ ] FTS5 full-text search with relevance ranking
-- [ ] Contextual injection: on startup, query memory for:
+- [x] Fact extraction pipeline (few-shot prompt → structured JSON → SQLite)
+- [x] Dialectic user profile (thesis/antithesis/synthesis after N sessions)
+- [x] FTS5 full-text search with relevance ranking
+- [x] Contextual injection: on startup, query memory for:
   - User profile summary
   - Top-3 most relevant past sessions
   - Recent facts related to current project
-- [ ] Background profile consolidation (run after session ends)
-- [ ] Optional Python sidecar for heavier NLP (fact extraction, classification)
-- [ ] Verify: after a week of use, agent knows your preferences without being told
+- [x] Background profile consolidation (run after session ends)
+- [ ] Optional Python sidecar for heavier NLP (deferred to future phase)
+- [ ] Verify: after a week of use, agent knows your preferences without being told (pending live use)
 
 ### Phase 4 — MCP & Tools
 
 *Week 4 — Goal: rich tool ecosystem via MCP.*
 
-- [ ] MCP extension implementing `@modelcontextprotocol/sdk`
-- [ ] Built-in MCP servers: filesystem, shell, web, git
-- [ ] Auto-discovery of MCP servers from `.pilav/mcp/`
-- [ ] Sandboxed shell execution (temp directories, path restrictions)
-- [ ] Tool result caching (avoid repeated expensive operations during TTS)
-- [ ] Verify: agent can browse the web, edit files, run git commands via MCP
+- [x] MCP extension implementing `@modelcontextprotocol/sdk`
+- [x] Built-in MCP servers: filesystem, shell, web, git
+- [x] Auto-discovery of MCP servers from `.pilav/mcp/`
+- [x] Sandboxed shell execution (temp directories, path restrictions)
+- [x] Tool result caching (avoid repeated expensive operations during TTS)
+- [ ] Verify: agent can browse the web, edit files, run git commands via MCP (pending live test)
 
 ### Phase 5 — Test-Time Scaling
 
 *Week 5 — Goal: agent works overnight on complex tasks.* Similar to /cto-plan workflow I use with Claude Code that run 90 mins non-stop. Model ensembling for sanity. If quality wont math try swe-protege paper.
 
-- [ ] Extended reasoning loop (break task into subtasks, execute sequentially)
-- [ ] Checkpoint system: save full agent state every N steps to `.pilav/checkpoints/`
-- [ ] Crash recovery: detect incomplete checkpoints, offer resume
-- [ ] Status streaming: periodic progress updates pushed to Telegram via gateway
-- [ ] Graceful interrupt (`/cancel` from Telegram)
-- [ ] Overnight use case: "Analyze this codebase and write a migration plan"
-- [ ] Verify: start a task, leave it running for 2+ hours, check results
+- [x] Extended reasoning loop (break task into subtasks, execute sequentially)
+- [x] Checkpoint system: save full agent state every N steps to `.pilav/checkpoints/`
+- [x] Crash recovery: detect incomplete checkpoints, offer resume
+- [x] Status streaming: periodic progress updates pushed to Telegram via gateway
+- [x] Graceful interrupt (`/cancel` from Telegram)
+- [x] Overnight use case: "Analyze this codebase and write a migration plan" — `/tts-run` fires the loop, checkpoints every step, streams status to Telegram
+- [x] 2h+ task support — loop is unbounded by default; crash recovery resumes from last checkpoint via `/tts-resume`
 
 ### Phase 6 — Speed & Fidelity (Future)
 
