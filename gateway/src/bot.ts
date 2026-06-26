@@ -286,6 +286,10 @@ export class TelegramGateway {
     this.bot.on("photo", (msg) => this.handlers.onPhoto(msg as TgMessage));
   }
 
+  sendMessage(chatId: number, text: string): void {
+    void this.bot.sendMessage(chatId, text).catch(() => {});
+  }
+
   async stop(): Promise<void> {
     await this.bot.stopPolling();
   }

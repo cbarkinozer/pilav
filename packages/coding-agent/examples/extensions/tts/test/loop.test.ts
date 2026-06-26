@@ -18,13 +18,13 @@ function makeTempDir(): string {
 	return dir;
 }
 
-// Minimal stub ExtensionAPI that auto-responds to sendUserMessage
+// Minimal stub ExtensionAPI that auto-responds to sendMessage
 function buildStubPi(responses: string[]) {
 	let callCount = 0;
 	const sentMessages: string[] = [];
 
 	return {
-		sendUserMessage: async (content: string) => {
+		sendMessage: async (content: string) => {
 			sentMessages.push(content);
 			return responses[callCount++ % responses.length] ?? "Done.";
 		},
@@ -36,7 +36,6 @@ function buildStubPi(responses: string[]) {
 		registerFlag: () => {},
 		registerMessageRenderer: () => {},
 		getFlag: () => undefined,
-		sendMessage: () => {},
 		appendEntry: () => {},
 		setSessionName: () => {},
 		getSessionName: () => undefined,

@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { checkCancelSignal, runTtsLoop, writeCancelSentinel } from "./loop.ts";
+import { checkCancelSignal, runTtsLoop, writeCancelSentinel, type PiLike } from "./loop.ts";
 import { loadCheckpoint, listCheckpoints } from "./checkpoint.ts";
 import { readStatus } from "./streaming.ts";
 import { homedir } from "node:os";
@@ -31,7 +31,7 @@ export default function (pi: ExtensionAPI) {
 				checkpointDir: DEFAULT_CHECKPOINT_DIR,
 				statusDir: DEFAULT_STATUS_DIR,
 				cancelDir: DEFAULT_CANCEL_DIR,
-			}, pi as never).then((result) => {
+			}, pi as unknown as PiLike).then((result) => {
 				ctx.ui.notify(`TTS ${sessionId} finished: ${result.status} after ${result.steps} steps`, "info");
 			}).catch((err: unknown) => {
 				ctx.ui.notify(`TTS ${sessionId} error: ${String(err)}`, "error");
@@ -100,7 +100,7 @@ export default function (pi: ExtensionAPI) {
 				statusDir: DEFAULT_STATUS_DIR,
 				cancelDir: DEFAULT_CANCEL_DIR,
 				resumeFrom: checkpoint.checkpointId,
-			}, pi as never).then((result) => {
+			}, pi as unknown as PiLike).then((result) => {
 				ctx.ui.notify(`TTS ${sessionId} resumed and finished: ${result.status} after ${result.steps} steps`, "info");
 			}).catch((err: unknown) => {
 				ctx.ui.notify(`TTS ${sessionId} resume error: ${String(err)}`, "error");

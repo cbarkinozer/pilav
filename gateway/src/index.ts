@@ -3,6 +3,7 @@ import { UserQueue } from "./queue.ts";
 import { PiSession } from "./rpc-client.ts";
 import { SessionRouter } from "./router.ts";
 import { TelegramGateway } from "./bot.ts";
+import { StatusPoller } from "./status-poller.ts";
 
 async function main(): Promise<void> {
   let config;
@@ -25,10 +26,17 @@ async function main(): Promise<void> {
 
   const gateway = new TelegramGateway(config.botToken, { router, queue, allowedUsers: config.allowedUsers });
 
+  const poller = new StatusPoller({
+    getChatIds: () => router.activeChatIds(),
+    sendMessage: async (chatId, text) => { gateway.sendMessage(chatId, text); },
+  });
+  poller.start();
+
   console.log("[pilav-gateway] Started. Listening for Telegram messages...");
 
   async function shutdown(): Promise<void> {
     console.log("[pilav-gateway] Shutting down...");
+    poller.stop();
     await gateway.stop();
     await router.stopAll();
     process.exit(0);

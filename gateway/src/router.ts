@@ -59,6 +59,10 @@ export class SessionRouter {
     await Promise.all(ids.map((id) => this.stop(id)));
   }
 
+  activeChatIds(): number[] {
+    return [...this.sessions.keys()];
+  }
+
   private resetTimer(chatId: number, entry: SessionEntry): void {
     if (entry.stopTimer !== null) clearTimeout(entry.stopTimer);
     entry.lastActive = Date.now();

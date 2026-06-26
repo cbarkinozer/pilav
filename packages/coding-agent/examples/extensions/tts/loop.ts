@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type CheckpointData, deleteCheckpoints, loadCheckpoint, saveCheckpoint } from "./checkpoint.ts";
+import { appendMonitoringEntry } from "./monitoring.ts";
 import { pushStatus } from "./streaming.ts";
+import { buildRetryPrompt, detectStuckReason, isStuck } from "./stuck.ts";
 
 export interface TtsOptions {
 	sessionId?: string;
@@ -11,6 +13,8 @@ export interface TtsOptions {
 	statusDir?: string;
 	cancelDir?: string;
 	resumeFrom?: string;
+	expertFn?: (question: string) => Promise<string>;
+	logDir?: string;
 }
 
 export interface TtsResult {
@@ -20,8 +24,8 @@ export interface TtsResult {
 	checkpointPath?: string;
 }
 
-interface PiLike {
-	sendUserMessage: (content: string) => Promise<string>;
+export interface PiLike {
+	sendMessage: (content: string) => Promise<string>;
 }
 
 function cancelDir(opts: TtsOptions): string {
@@ -43,6 +47,8 @@ export async function runTtsLoop(task: string, options: TtsOptions, pi: PiLike):
 	const ckptDir = options.checkpointDir;
 	const statDir = options.statusDir;
 	const cxlDir = cancelDir(options);
+	const expertFn = options.expertFn;
+	const logDir = options.logDir;
 	const startTime = Date.now();
 
 	// Check cancel signal before we even start
@@ -65,7 +71,7 @@ export async function runTtsLoop(task: string, options: TtsOptions, pi: PiLike):
 	const planPrompt = `You are performing extended reasoning on a complex task. Break it into ${maxSteps - startStep} sequential subtasks and list them numbered 1 to N. Task: ${task}`;
 	let planResponse: string;
 	try {
-		planResponse = await pi.sendUserMessage(planPrompt);
+		planResponse = await pi.sendMessage(planPrompt);
 	} catch {
 		pushStatus({ sessionId, step: 0, totalSteps: maxSteps, currentTask: "Planning failed", elapsedMs: Date.now() - startTime, status: "error" }, statDir);
 		return { status: "error", steps: 0, result: "Planning step failed" };
@@ -100,16 +106,62 @@ export async function runTtsLoop(task: string, options: TtsOptions, pi: PiLike):
 			return { status: "cancelled", steps: step, result: results.join("\n"), checkpointPath: lastCheckpointPath };
 		}
 
-		// Execute subtask
+		// Execute subtask with stuck detection and retry
 		pushStatus({ sessionId, step, totalSteps: subtasks.length + startStep, currentTask, elapsedMs: Date.now() - startTime, status: "working" }, statDir);
 
+		const basePrompt = `Execute subtask ${step}/${subtasks.length + startStep}: ${currentTask}`;
 		let stepResult: string;
-		try {
-			stepResult = await pi.sendUserMessage(`Execute subtask ${step}/${subtasks.length + startStep}: ${currentTask}`);
-		} catch {
-			stepResult = `[error on step ${step}]`;
+		let retryCount = 0;
+		let previousResponse: string | undefined;
+		let stuckReason: string | undefined;
+		let expertGuidance: string | undefined;
+
+		while (true) {
+			let prompt = retryCount === 0 ? basePrompt : buildRetryPrompt(basePrompt, stuckReason as Parameters<typeof buildRetryPrompt>[1], retryCount);
+			if (expertGuidance) prompt = `[Expert guidance: ${expertGuidance}]\n\n${prompt}`;
+
+			try {
+				stepResult = await pi.sendMessage(prompt);
+			} catch {
+				stepResult = `[error on step ${step}]`;
+				break;
+			}
+
+			const stuck = isStuck(stepResult, { retryCount, previousResponse });
+			if (!stuck) break;
+
+			stuckReason = detectStuckReason(stepResult, { retryCount, previousResponse }) ?? "short_response";
+			retryCount++;
+
+			// Escalate to expert on second failure (retryCount just became 2)
+			if (retryCount === 2 && expertFn && !expertGuidance) {
+				try {
+					expertGuidance = await expertFn(`Stuck on: ${currentTask}. Reason: ${stuckReason}. Last response: ${String(stepResult).slice(0, 200)}`);
+				} catch { /* ignore — proceed without guidance */ }
+			}
+
+			if (retryCount >= 3) {
+				// Max retries reached — accept the last response
+				break;
+			}
+			previousResponse = stepResult;
 		}
-		results.push(`Step ${step}: ${stepResult}`);
+
+		results.push(`Step ${step}: ${stepResult!}`);
+
+		appendMonitoringEntry({
+			timestamp: new Date().toISOString(),
+			sessionId,
+			step,
+			model: process.env.LM_STUDIO_MODEL ?? "unknown",
+			task: currentTask,
+			responseLength: stepResult!.length,
+			latencyMs: Date.now() - startTime,
+			retries: retryCount,
+			retryReason: stuckReason,
+			escalated: expertGuidance !== undefined,
+			status: "working",
+		}, logDir);
 
 		// Save checkpoint after each step
 		const ckptData: CheckpointData = {
