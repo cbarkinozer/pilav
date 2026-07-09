@@ -4,6 +4,7 @@ import { PiSession } from "./rpc-client.ts";
 import { SessionRouter } from "./router.ts";
 import { TelegramGateway } from "./bot.ts";
 import { StatusPoller } from "./status-poller.ts";
+import { ActionStore } from "./action-store.ts";
 
 async function main(): Promise<void> {
   let config;
@@ -13,6 +14,11 @@ async function main(): Promise<void> {
     console.error(`[pilav-gateway] Failed to load config: ${(err as Error).message}`);
     process.exit(1);
   }
+
+  // SQLite action trace store — records every Claude Code session for future SFT training
+  const actionStore = new ActionStore();
+  console.log("[pilav-gateway] Action store initialised at ~/.pilav/pilav.db");
+  console.log(`[pilav-gateway] ${actionStore.sessionCount()} Claude Code sessions recorded to date`);
 
   const queue = new UserQueue();
   // Project root: pilav/ — Pi auto-discovers .pi/extensions/ from here
@@ -31,7 +37,14 @@ async function main(): Promise<void> {
     timeoutMs: config.sessionTimeoutMs,
   });
 
-  const gateway = new TelegramGateway(config.botToken, { router, queue, allowedUsers: config.allowedUsers });
+  const gateway = new TelegramGateway(config.botToken, {
+    router,
+    queue,
+    allowedUsers: config.allowedUsers,
+    actionStore,
+    defaultProjectDir: config.defaultProjectDir,
+  });
+  console.log(`[pilav-gateway] Default project dir: ${config.defaultProjectDir}`);
 
   const poller = new StatusPoller({
     getChatIds: () => router.activeChatIds(),
@@ -47,6 +60,7 @@ async function main(): Promise<void> {
     poller.stop();
     await gateway.stop();
     await router.stopAll();
+    actionStore.close();
     process.exit(0);
   }
 

@@ -6,6 +6,9 @@ import TelegramBot from "node-telegram-bot-api";
 import type { UserQueue } from "./queue.ts";
 import type { SessionRouter } from "./router.ts";
 import { LMStudioChat } from "./lm-chat.ts";
+import type { ActionStore } from "./action-store.ts";
+import { ClaudeCodeRunner } from "./claude-code-session.ts";
+import { IntentClassifier } from "./intent-classifier.ts";
 
 /**
  * Convert CommonMark-style markdown (from LLMs) to Telegram Markdown.
@@ -47,6 +50,10 @@ export interface HandlerDeps {
   bot?: TelegramBot;
   /** Override the LM Studio chat function for testing. Receives (chatId, text). */
   lmChatFn?: (chatId: number, text: string) => Promise<string>;
+  /** SQLite action store for Claude Code session traces. */
+  actionStore?: ActionStore;
+  /** Working directory for Claude Code code_dev sessions. */
+  defaultProjectDir?: string;
 }
 
 type TgMessage = {
@@ -75,8 +82,20 @@ function isAllowed(userId: number, allowedUsers: number[]): boolean {
 
 const TYPING_INTERVAL_MS = 4000;
 
+// One ClaudeCodeRunner + one IntentClassifier per handler set
+let _claudeRunner: ClaudeCodeRunner | null = null;
+let _classifier: IntentClassifier | null = null;
+const _activeClaude = new Map<number, string>(); // chatId → sessionId
+
 export function createHandlers(deps: HandlerDeps) {
   const { router, queue, sendReply, allowedUsers } = deps;
+
+  if (deps.actionStore && !_claudeRunner) {
+    _claudeRunner = new ClaudeCodeRunner(deps.actionStore);
+  }
+  if (!_classifier) {
+    _classifier = new IntentClassifier();
+  }
 
   const sendTyping = deps.sendTyping ?? ((chatId: number) =>
     deps.bot ? deps.bot.sendChatAction(chatId, "typing").then(() => {}) : Promise.resolve()
@@ -104,105 +123,133 @@ export function createHandlers(deps: HandlerDeps) {
     const text = msg.text ?? "";
     if (!text) return;
 
-    // /pilav <task> — explicit Pi agent invocation
+    // /pilav <task> — explicit Pi override (skip classifier)
     const isPiCommand = text.startsWith("/pilav ");
+    // Drop other slash commands (/start /status /cancel /claude have their own handlers)
     if (text.startsWith("/") && !isPiCommand) return;
 
     void sendTyping(chatId);
     await queue.enqueue(userId, async () => {
       const typingTimer = startTypingInterval(chatId);
       try {
+        // ---- Explicit /pilav override → Pi agent ----
         if (isPiCommand) {
-          const task = text.slice(8).trim(); // strip "/pilav "
-          console.log(`[pilav] chat=${chatId} route=Pi task="${task.slice(0, 80)}"`);
-          try {
-            const session = await router.getOrCreate(chatId);
-            console.log(`[pilav] Pi session ready for chat=${chatId}`);
-
-            if (deps.sendStreamingMessage && deps.editMessage && "sendMessageStreaming" in session) {
-              const thinkingId = await deps.sendStreamingMessage(chatId, "⏳ Pi is working on it…");
-              let lastEdit = Date.now();
-              const EDIT_INTERVAL_MS = 2000;
-
-              const response = await (session as any).sendMessageStreaming(
-                task,
-                async (accumulated: string) => {
-                  const now = Date.now();
-                  if (now - lastEdit >= EDIT_INTERVAL_MS) {
-                    lastEdit = now;
-                    const preview = accumulated.slice(-TELEGRAM_MAX_LENGTH);
-                    await deps.editMessage!(chatId, thinkingId, preview || "⏳ Pi is working on it…");
-                  }
-                },
-              );
-
-              const final = response || "(no response)";
-              if (final.length <= TELEGRAM_MAX_LENGTH) {
-                await deps.editMessage!(chatId, thinkingId, final);
-              } else {
-                await deps.editMessage!(chatId, thinkingId, final.slice(0, TELEGRAM_MAX_LENGTH));
-                for (const chunk of splitMessage(final.slice(TELEGRAM_MAX_LENGTH))) {
-                  await sendReply(chatId, chunk);
-                }
-              }
-            } else {
-              const response = await session.sendMessage(task);
-              await replyChunked(chatId, response || "(no response)");
-            }
-          } catch (piErr) {
-            console.error("[pilav] Pi session error:", (piErr as Error).message);
-            await sendReply(chatId, `Pi agent error: ${(piErr as Error).message.slice(0, 200)}`);
-          }
-        } else {
-          // Everything else → LM Studio (fast, streaming, casual + code questions)
-          console.log(`[pilav] chat=${chatId} route=LMStudio msg="${text.slice(0, 60)}"`);
-          try {
-            if (deps.lmChatFn) {
-              // Test path: no streaming
-              const response = await deps.lmChatFn(chatId, text);
-              await replyChunked(chatId, response || "I didn't get a response from the model. Try rephrasing.");
-            } else if (deps.sendStreamingMessage && deps.editMessage) {
-              // Streaming path: send placeholder, edit in-place with thinking blocks
-              const msgId = await deps.sendStreamingMessage(chatId, "⏳ Thinking…");
-              let lastEdit = Date.now();
-              const EDIT_INTERVAL_MS = 2000;
-
-              const finalResponse = await getChatSession(chatId).chatStreaming(text, async (display) => {
-                const now = Date.now();
-                if (now - lastEdit >= EDIT_INTERVAL_MS) {
-                  lastEdit = now;
-                  await deps.editMessage!(chatId, msgId, display.slice(-TELEGRAM_MAX_LENGTH) || "⏳ Thinking…");
-                }
-              });
-
-              const final = finalResponse || "I didn't get a response from the model. Try rephrasing.";
-              if (final.length <= TELEGRAM_MAX_LENGTH) {
-                await deps.editMessage!(chatId, msgId, final);
-              } else {
-                await deps.editMessage!(chatId, msgId, final.slice(0, TELEGRAM_MAX_LENGTH));
-                for (const chunk of splitMessage(final.slice(TELEGRAM_MAX_LENGTH))) {
-                  await sendReply(chatId, chunk);
-                }
-              }
-            } else {
-              // Fallback: non-streaming
-              const response = await getChatSession(chatId).chat(text);
-              await replyChunked(chatId, response || "I didn't get a response from the model. Try rephrasing.");
-            }
-          } catch (err) {
-            console.error("[pilav-gateway] LM Studio chat error:", (err as Error).message);
-            await sendReply(chatId, `Sorry, model error: ${(err as Error).message.slice(0, 200)}`);
-          }
+          const task = text.slice(7).trim();
+          await routeToPi(chatId, task);
+          return;
         }
+
+        // ---- Auto-routing via intent classifier ----
+        const intent = await _classifier!.classify(text);
+        console.log(`[pilav] chat=${chatId} intent=${intent} msg="${text.slice(0, 60)}"`);
+
+        if (intent === "code_dev") {
+          // Code development → Claude Code
+          if (!_claudeRunner) {
+            await sendReply(chatId, "Claude Code runner not available (no action store).");
+            return;
+          }
+          if (_activeClaude.has(chatId)) {
+            await sendReply(chatId, "A Claude Code session is already running. Use /cancel to stop it first.");
+            return;
+          }
+
+          // Each progress update is a new message so history is preserved
+          let lastSent = "";
+          let lastSentTime = 0;
+          const MIN_INTERVAL_MS = 3000; // don't spam faster than 1 msg / 3s
+
+          const sendProgress = async (progressText: string) => {
+            const now = Date.now();
+            const truncated = progressText.slice(0, 3800);
+            if (truncated === lastSent) return;
+            if (now - lastSentTime < MIN_INTERVAL_MS) return;
+            lastSent = truncated;
+            lastSentTime = now;
+            await sendReply(chatId, truncated);
+          };
+
+          const result = await _claudeRunner.run({
+            task: text,
+            telegramChatId: chatId,
+            cwd: deps.defaultProjectDir,
+            onProgress: sendProgress,
+          });
+
+          _activeClaude.delete(chatId);
+
+          const status = result.status === "completed"
+            ? `✅ Done (${result.eventsLogged} events logged)`
+            : `❌ ${result.status}: ${result.errorMessage?.slice(0, 150) ?? ""}`;
+          await sendReply(chatId, status);
+
+          if (result.finalText) {
+            for (const chunk of splitMessage(result.finalText)) {
+              await sendReply(chatId, chunk);
+            }
+          }
+          return;
+        }
+
+        if (intent === "local_action") {
+          // Local action → Pi agent
+          await routeToPi(chatId, text);
+          return;
+        }
+
+        // chat → LM Studio
+        await routeToLMStudio(chatId, text);
       } finally {
         clearInterval(typingTimer);
       }
     });
   }
 
+  async function routeToPi(chatId: number, task: string): Promise<void> {
+    console.log(`[pilav] chat=${chatId} route=Pi task="${task.slice(0, 80)}"`);
+    try {
+      const session = await router.getOrCreate(chatId);
+      // Always send the final response as a new message — no edit-in-place
+      const response = await session.sendMessage(task);
+      await replyChunked(chatId, response || "(no response)");
+    } catch (err) {
+      console.error("[pilav] Pi session error:", (err as Error).message);
+      await sendReply(chatId, `Pi agent error: ${(err as Error).message.slice(0, 200)}`);
+    }
+  }
+
+  async function routeToLMStudio(chatId: number, text: string): Promise<void> {
+    console.log(`[pilav] chat=${chatId} route=LMStudio msg="${text.slice(0, 60)}"`);
+    try {
+      if (deps.lmChatFn) {
+        const response = await deps.lmChatFn(chatId, text);
+        await replyChunked(chatId, response || "I didn't get a response from the model. Try rephrasing.");
+        return;
+      }
+      // Collect full response then send as a single new message — no edit-in-place
+      const response = await getChatSession(chatId).chat(text);
+      await replyChunked(chatId, response || "I didn't get a response. Try rephrasing.");
+    } catch (err) {
+      console.error("[pilav-gateway] LM Studio chat error:", (err as Error).message);
+      await sendReply(chatId, `Sorry, model error: ${(err as Error).message.slice(0, 200)}`);
+    }
+  }
+
   async function onStart(msg: TgMessage): Promise<void> {
     const chatId = msg.chat.id;
-    await sendReply(chatId, "Hello! I'm Pilav — your always-on AI assistant.\n\nJust chat with me for questions, code help, or anything else.\n\nUse /pilav <task> to run Pi agent on your computer — file edits, repo work, shell commands.\n\nOther commands: /status /cancel");
+    await sendReply(chatId,
+      "Hello! I'm Pilav — your always-on AI assistant.\n\n" +
+      "Just talk to me naturally:\n\n" +
+      "  • Ask anything → I answer (weather, facts, questions)\n" +
+      "  • 'Write this to my local' → Pi writes the file\n" +
+      "  • 'Continue the project' → Claude Code takes over\n\n" +
+      "I automatically route your message to the right tool.\n\n" +
+      "Override commands:\n" +
+      "  /pilav <task> — force Pi agent\n" +
+      "  /claude <task> — force Claude Code\n" +
+      "  /status — active session info\n" +
+      "  /cancel — stop running task",
+    );
   }
 
   async function onStatus(msg: TgMessage): Promise<void> {
@@ -239,9 +286,92 @@ export function createHandlers(deps: HandlerDeps) {
       return;
     }
 
+    // Cancel any active Claude Code session for this chat
+    const activeSessionId = _activeClaude.get(chatId);
+    if (activeSessionId && _claudeRunner) {
+      _claudeRunner.cancel(activeSessionId);
+      _activeClaude.delete(chatId);
+      await sendReply(chatId, "Cancelled Claude Code session.");
+      return;
+    }
+
     const session = await router.getOrCreate(chatId);
     await session.cancel();
     await sendReply(chatId, "Cancelled current operation.");
+  }
+
+  async function onClaudeCommand(msg: TgMessage): Promise<void> {
+    const chatId = msg.chat.id;
+    const userId = msg.from?.id ?? chatId;
+
+    if (!isAllowed(userId, allowedUsers)) {
+      await sendReply(chatId, "You are not authorized.");
+      return;
+    }
+
+    const text = msg.text ?? "";
+    const task = text.replace(/^\/claude\s*/i, "").trim();
+
+    if (!task) {
+      await sendReply(chatId, "Usage: /claude <task>\n\nExample: /claude list all files in the pilav project");
+      return;
+    }
+
+    if (_activeClaude.has(chatId)) {
+      await sendReply(chatId, "A Claude Code session is already running. Use /cancel to stop it first.");
+      return;
+    }
+
+    if (!_claudeRunner) {
+      await sendReply(chatId, "Claude Code runner not available (no action store configured).");
+      return;
+    }
+
+    void queue.enqueue(userId, async () => {
+      const typingTimer = startTypingInterval(chatId);
+
+      // Send each progress update as a new message — no edit-in-place
+      let lastSent = "";
+      let lastSentTime = 0;
+      const MIN_INTERVAL_MS = 3000;
+
+      const sendProgress = async (progressText: string) => {
+        const now = Date.now();
+        const truncated = progressText.slice(0, 3800);
+        if (truncated === lastSent || now - lastSentTime < MIN_INTERVAL_MS) return;
+        lastSent = truncated;
+        lastSentTime = now;
+        await sendReply(chatId, truncated);
+      };
+
+      try {
+        const result = await _claudeRunner!.run({
+          task,
+          telegramChatId: chatId,
+          onProgress: sendProgress,
+        });
+
+        _activeClaude.delete(chatId);
+
+        const status = result.status === "completed"
+          ? `✅ Done (${result.eventsLogged} events, session ${result.sessionId.slice(0, 8)})`
+          : `❌ ${result.status}: ${result.errorMessage?.slice(0, 200) ?? ""}`;
+        await sendReply(chatId, status);
+
+        if (result.finalText) {
+          for (const chunk of splitMessage(result.finalText)) {
+            await sendReply(chatId, chunk);
+          }
+        } else if (result.errorMessage) {
+          await sendReply(chatId, result.errorMessage.slice(0, 1000));
+        }
+      } catch (err) {
+        _activeClaude.delete(chatId);
+        await sendReply(chatId, `Claude Code error: ${(err as Error).message.slice(0, 300)}`);
+      } finally {
+        clearInterval(typingTimer);
+      }
+    });
   }
 
   async function onDocument(msg: TgMessage): Promise<void> {
@@ -317,7 +447,7 @@ export function createHandlers(deps: HandlerDeps) {
     }
   }
 
-  return { onMessage, onStart, onStatus, onCancel, onDocument, onPhoto };
+  return { onMessage, onStart, onStatus, onCancel, onClaudeCommand, onDocument, onPhoto };
 }
 
 async function downloadFile(bot: TelegramBot, telegramPath: string, fileName: string): Promise<string> {
@@ -334,7 +464,7 @@ export class TelegramGateway {
   private bot: TelegramBot;
   private handlers: ReturnType<typeof createHandlers>;
 
-  constructor(token: string, deps: Omit<HandlerDeps, "sendReply" | "bot">) {
+  constructor(token: string, deps: Omit<HandlerDeps, "sendReply" | "bot" | "sendStreamingMessage" | "editMessage">) {
     this.bot = new TelegramBot(token, { polling: true });
 
     const sendReply = async (chatId: number, text: string) => {
@@ -376,9 +506,10 @@ export class TelegramGateway {
     this.bot.onText(/\/start/, (msg) => this.handlers.onStart(msg as TgMessage));
     this.bot.onText(/\/status/, (msg) => this.handlers.onStatus(msg as TgMessage));
     this.bot.onText(/\/cancel/, (msg) => this.handlers.onCancel(msg as TgMessage));
+    this.bot.onText(/^\/claude(\s|$)/, (msg) => this.handlers.onClaudeCommand(msg as TgMessage));
     this.bot.on("message", (msg) => {
       const text = msg.text ?? "";
-      // Pass through normal messages AND /pilav commands; drop all other slash commands
+      // Pass through normal messages and /pilav commands; /claude has its own handler
       if (!text.startsWith("/") || text.startsWith("/pilav ")) {
         this.handlers.onMessage(msg as TgMessage);
       }

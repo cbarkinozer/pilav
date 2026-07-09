@@ -15,6 +15,8 @@ export interface GatewayConfig {
   allowedUsers: number[];
   piCliPath: string;
   sessionTimeoutMs: number;
+  /** Working directory Claude Code uses for code_dev tasks */
+  defaultProjectDir: string;
 }
 
 interface ConfigFile {
@@ -22,6 +24,7 @@ interface ConfigFile {
   allowedUsers?: number[];
   piCliPath?: string;
   sessionTimeoutMs?: number;
+  defaultProjectDir?: string;
 }
 
 function loadConfigFile(): ConfigFile {
@@ -62,6 +65,7 @@ export async function loadConfig(): Promise<GatewayConfig> {
 
   const piCliPath = process.env.PI_CLI_PATH ?? file.piCliPath ?? defaultPiCliPath();
   const sessionTimeoutMs = file.sessionTimeoutMs ?? 30 * 60 * 1000; // 30 minutes
+  const defaultProjectDir = process.env.PILAV_PROJECT_DIR ?? file.defaultProjectDir ?? homedir();
 
-  return { botToken, allowedUsers, piCliPath, sessionTimeoutMs };
+  return { botToken, allowedUsers, piCliPath, sessionTimeoutMs, defaultProjectDir };
 }
