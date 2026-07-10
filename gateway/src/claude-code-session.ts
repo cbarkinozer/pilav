@@ -17,10 +17,14 @@ export interface RunOptions {
   task: string;
   telegramChatId?: number;
   cwd?: string;
+  /** User-given name for this session (e.g. "btmotor") */
+  name?: string;
   /** Called on each progress update (tool name, partial text, etc.) */
   onProgress?: (text: string) => void | Promise<void>;
   /** Skip the LLM permission judge and use these settings directly */
   overridePilotDecision?: PilotDecision;
+  /** Claude Code internal session ID — resumes an existing conversation */
+  resumeClaudeSessionId?: string;
 }
 
 export interface RunResult {
@@ -30,6 +34,9 @@ export interface RunResult {
   errorMessage?: string;
   pilotDecision: PilotDecision;
   eventsLogged: number;
+  /** Claude Code's internal session ID — save this for future --resume calls */
+  claudeSessionId?: string;
+  name?: string;
 }
 
 /** Summarise a Claude Code stream-json event into a human-readable progress line. */
@@ -108,6 +115,7 @@ export class ClaudeCodeRunner {
       permissionMode: pilotDecision.permissionMode,
       allowedTools: pilotDecision.allowedTools.length ? pilotDecision.allowedTools : null,
       pilotDecision,
+      name: opts.name,
     });
 
     this.store.logEvent(sessionId, "pilot_decision", pilotDecision, ++seq);
@@ -123,21 +131,33 @@ export class ClaudeCodeRunner {
       "--print",
       "--output-format", "stream-json",
       "--verbose",
+      "--model", "claude-sonnet-4-6",
       "--permission-mode", pilotDecision.permissionMode,
     ];
 
     if (pilotDecision.allowedTools.length > 0) {
       args.push("--allowedTools", pilotDecision.allowedTools.join(","));
     }
+    if (opts.resumeClaudeSessionId) {
+      args.push("--resume", opts.resumeClaudeSessionId);
+    }
     // Note: task is fed via stdin to avoid Commander.js eating it when --allowedTools is variadic
 
     // --- Step 4: Spawn and stream ---
+    const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+    const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
     return new Promise<RunResult>((resolve) => {
-      const claudeProcess = spawn("claude", args, {
+      const claudeProcess = spawn(CLAUDE_BIN, args, {
         cwd: opts.cwd ?? process.env.HOME ?? "/tmp",
         env: { ...process.env },
         stdio: ["pipe", "pipe", "pipe"],
       });
+
+      const sessionTimer = setTimeout(() => {
+        claudeProcess.kill("SIGTERM");
+        void opts.onProgress?.("⚠️ Session timed out after 30 minutes — killed.");
+      }, SESSION_TIMEOUT_MS);
 
       // Feed task via stdin so --allowedTools flag doesn't consume it as an argument
       claudeProcess.stdin?.write(opts.task);
@@ -149,6 +169,7 @@ export class ClaudeCodeRunner {
       let finalText = "";
       let exitCode: number | null = null;
       let stderrOutput = "";
+      let capturedClaudeSessionId: string | undefined;
 
       claudeProcess.stderr?.on("data", (chunk: Buffer) => {
         stderrOutput += chunk.toString();
@@ -173,9 +194,13 @@ export class ClaudeCodeRunner {
 
           this.store.logEvent(sessionId, String(event.type ?? "unknown"), event, ++seq);
 
-          // Extract final text from result event
+          // Extract final text and Claude's session ID from result event
           if (event.type === "result") {
             finalText = String(event.result ?? "");
+            if (typeof event.session_id === "string" && event.session_id) {
+              capturedClaudeSessionId = event.session_id;
+              this.store.setClaudeSessionId(sessionId, event.session_id);
+            }
           }
 
           // Extract text from assistant events (for streaming display)
@@ -199,6 +224,7 @@ export class ClaudeCodeRunner {
       });
 
       claudeProcess.on("close", (code) => {
+        clearTimeout(sessionTimer);
         exitCode = code;
         this.activeProcesses.delete(sessionId);
 
@@ -213,10 +239,13 @@ export class ClaudeCodeRunner {
           errorMessage: exitCode !== 0 ? stderrOutput.slice(0, 300) : undefined,
           pilotDecision,
           eventsLogged: seq,
+          claudeSessionId: capturedClaudeSessionId,
+          name: opts.name,
         });
       });
 
       claudeProcess.on("error", (err) => {
+        clearTimeout(sessionTimer);
         this.activeProcesses.delete(sessionId);
         this.store.logEvent(sessionId, "spawn_error", { message: err.message }, ++seq);
         this.store.endSession(sessionId, "error");
@@ -227,6 +256,7 @@ export class ClaudeCodeRunner {
           errorMessage: `Failed to spawn claude: ${err.message}`,
           pilotDecision,
           eventsLogged: seq,
+          name: opts.name,
         });
       });
     });

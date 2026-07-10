@@ -64,7 +64,7 @@ export class PermissionJudge {
           model: this.model,
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: `Task: ${task}` },
+            { role: "user", content: `/no_think\nTask: ${task}` },
           ],
           temperature: 0.1,
           max_tokens: 512,
@@ -80,8 +80,8 @@ export class PermissionJudge {
       // Strip thinking tags if model emits them
       const stripped = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
-      // Extract JSON from the response (might be wrapped in ```json fences)
-      const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+      // Extract JSON — search stripped first, fall back to raw (JSON might be inside <think>)
+      const jsonMatch = stripped.match(/\{[\s\S]*\}/) ?? raw.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("No JSON in LLM response");
 
       const parsed = JSON.parse(jsonMatch[0]) as {

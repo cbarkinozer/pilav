@@ -16,6 +16,8 @@ export interface SessionRecord {
   permissionMode: string;
   allowedTools: string[] | null;
   pilotDecision: PilotDecision | null;
+  /** User-given name for this session (e.g. "btmotor") */
+  name?: string;
 }
 
 export interface PilotDecision {
@@ -69,13 +71,20 @@ export class ActionStore {
     this.db = new Database(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    // Migrations — safe to run on existing DBs
+    for (const col of [
+      "ALTER TABLE claude_sessions ADD COLUMN claude_session_id TEXT",
+      "ALTER TABLE claude_sessions ADD COLUMN name TEXT",
+    ]) {
+      try { this.db.exec(col); } catch { /* column already exists */ }
+    }
   }
 
   startSession(rec: SessionRecord): void {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO claude_sessions
-        (session_id, task, started_at, status, telegram_chat_id, permission_mode, allowed_tools, pilot_decision)
-      VALUES (?, ?, ?, 'running', ?, ?, ?, ?)
+        (session_id, task, started_at, status, telegram_chat_id, permission_mode, allowed_tools, pilot_decision, name)
+      VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?)
     `);
     stmt.run(
       rec.sessionId,
@@ -85,7 +94,13 @@ export class ActionStore {
       rec.permissionMode,
       rec.allowedTools ? JSON.stringify(rec.allowedTools) : null,
       rec.pilotDecision ? JSON.stringify(rec.pilotDecision) : null,
+      rec.name ?? null,
     );
+  }
+
+  setClaudeSessionId(sessionId: string, claudeSessionId: string): void {
+    this.db.prepare("UPDATE claude_sessions SET claude_session_id = ? WHERE session_id = ?")
+      .run(claudeSessionId, sessionId);
   }
 
   logEvent(sessionId: string, eventType: string, eventData: unknown, sequenceNumber: number): void {
@@ -127,11 +142,25 @@ export class ActionStore {
     return row.count;
   }
 
-  recentSessions(limit = 10): Array<{ sessionId: string; task: string; status: string; startedAt: number }> {
+  recentSessions(limit = 10): Array<{
+    sessionId: string;
+    task: string;
+    status: string;
+    startedAt: number;
+    claudeSessionId: string | null;
+    name: string | null;
+  }> {
     return (this.db
-      .prepare("SELECT session_id, task, status, started_at FROM claude_sessions ORDER BY started_at DESC LIMIT ?")
-      .all(limit) as Array<{ session_id: string; task: string; status: string; started_at: number }>)
-      .map((r) => ({ sessionId: r.session_id, task: r.task, status: r.status, startedAt: r.started_at }));
+      .prepare("SELECT session_id, task, status, started_at, claude_session_id, name FROM claude_sessions ORDER BY started_at DESC LIMIT ?")
+      .all(limit) as Array<{ session_id: string; task: string; status: string; started_at: number; claude_session_id: string | null; name: string | null }>)
+      .map((r) => ({
+        sessionId: r.session_id,
+        task: r.task,
+        status: r.status,
+        startedAt: r.started_at,
+        claudeSessionId: r.claude_session_id,
+        name: r.name,
+      }));
   }
 
   close(): void {

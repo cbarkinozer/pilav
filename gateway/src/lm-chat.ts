@@ -1,7 +1,11 @@
 /**
  * Direct LM Studio chat client for Qwen.
  * Supports streaming with live <thinking> blocks in Telegram.
+ * History is persisted to disk and auto-compacted when it grows too long.
  */
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export type ThinkingMode = "think" | "no_think";
 
@@ -14,6 +18,28 @@ const TASK_KEYWORDS = [
 
 const MAX_TOKENS = 16384;
 const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const COMPACT_THRESHOLD = 20;  // summarize when history exceeds this many messages
+const HISTORY_DIR = join(homedir(), ".pilav", "history");
+
+function historyPath(chatId: number): string {
+  return join(HISTORY_DIR, `chat-${chatId}.json`);
+}
+
+function loadHistory(chatId: number): LMChatMessage[] {
+  try {
+    mkdirSync(HISTORY_DIR, { recursive: true });
+    const p = historyPath(chatId);
+    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf-8")) as LMChatMessage[];
+  } catch {}
+  return [];
+}
+
+function saveHistory(chatId: number, history: LMChatMessage[]): void {
+  try {
+    mkdirSync(HISTORY_DIR, { recursive: true });
+    writeFileSync(historyPath(chatId), JSON.stringify(history), "utf-8");
+  } catch {}
+}
 
 export function detectThinkingMode(message: string): ThinkingMode {
 	const lower = message.toLowerCase();
@@ -59,15 +85,23 @@ export class LMStudioChat {
 	private model: string;
 	private fetchFn: typeof globalThis.fetch;
 	private history: LMChatMessage[] = [];
+	private chatId: number;
 
-	constructor(opts: LMChatOptions = {}) {
+	constructor(chatId: number, opts: LMChatOptions = {}) {
+		this.chatId = chatId;
 		this.baseUrl = opts.lmStudioUrl ?? process.env.LM_STUDIO_URL ?? "http://localhost:1234";
 		this.model = opts.model ?? process.env.LM_STUDIO_MODEL ?? "qwen/qwen3.5-9b";
 		this.fetchFn = opts.fetch ?? globalThis.fetch;
+		this.history = loadHistory(chatId);
 	}
 
 	clearHistory(): void {
 		this.history = [];
+		saveHistory(this.chatId, []);
+	}
+
+	historyLength(): number {
+		return this.history.length;
 	}
 
 	private buildMessages(userMessage: string): LMChatMessage[] {
@@ -81,11 +115,53 @@ export class LMStudioChat {
 	private updateHistory(userMessage: string, cleanReply: string): void {
 		this.history.push({ role: "user", content: userMessage });
 		this.history.push({ role: "assistant", content: cleanReply });
-		if (this.history.length > 40) this.history = this.history.slice(-40);
+		saveHistory(this.chatId, this.history);
+	}
+
+	/**
+	 * Summarize the current history into a single context message using Qwen,
+	 * then replace history with just that summary. Like Claude Code's /compact.
+	 * Returns the summary text, or null if LM Studio is unavailable.
+	 */
+	async compact(): Promise<string | null> {
+		if (this.history.length === 0) return null;
+		const transcript = this.history
+			.map((m) => `${m.role === "user" ? "User" : "Pilav"}: ${m.content}`)
+			.join("\n\n");
+		try {
+			const resp = await this.fetchFn(`${this.baseUrl}/v1/chat/completions`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					model: this.model,
+					messages: [
+						{ role: "system", content: "You are a summarizer. Produce a concise but complete summary of this conversation that preserves all important context, decisions, and facts. The summary will replace the conversation history so future messages can build on it." },
+						{ role: "user", content: transcript },
+					],
+					temperature: 0.3,
+					max_tokens: 1024,
+					stream: false,
+				}),
+				signal: AbortSignal.timeout(30_000),
+			});
+			if (!resp.ok) return null;
+			const data = await resp.json() as { choices: Array<{ message: { content: string } }> };
+			const summary = data.choices?.[0]?.message?.content?.replace(/<think>[\s\S]*?<\/think>/g, "").trim() ?? null;
+			if (summary) {
+				this.history = [{ role: "system", content: `[Conversation summary]\n${summary}` }];
+				saveHistory(this.chatId, this.history);
+			}
+			return summary;
+		} catch {
+			return null;
+		}
 	}
 
 	/** Non-streaming fallback. Returns clean reply (thinking stripped). */
 	async chat(userMessage: string): Promise<string> {
+		if (this.history.length >= COMPACT_THRESHOLD) {
+			await this.compact(); // auto-summarize silently before next message
+		}
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -123,6 +199,9 @@ export class LMStudioChat {
 		userMessage: string,
 		onChunk: (displayText: string) => Promise<void> | void,
 	): Promise<string> {
+		if (this.history.length >= COMPACT_THRESHOLD) {
+			await this.compact();
+		}
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
