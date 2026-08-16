@@ -92,6 +92,9 @@ let _openCodeRunner: OpenCodeRunner | null = null;
 let _classifier: IntentClassifier | null = null;
 let _projectRegistry: ProjectRegistry | null = null;
 
+// Cached OpenCode CLI version (checked once at startup)
+let _openCodeVersion: string | null = null;
+
 interface ActiveSession {
   sessionId: string;   // our internal UUID
   chatId: number;
@@ -129,6 +132,14 @@ export function createHandlers(deps: HandlerDeps) {
   }
   if (deps.actionStore && !_openCodeRunner) {
     _openCodeRunner = new OpenCodeRunner(deps.actionStore);
+    // Cache OpenCode CLI version at startup
+    if (_openCodeVersion === null) {
+      const proc = spawn("opencode", ["--version"], { stdio: ["ignore", "pipe", "ignore"] });
+      let out = "";
+      proc.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
+      proc.on("close", () => { _openCodeVersion = out.trim() || null; });
+      proc.on("error", () => { _openCodeVersion = null; });
+    }
   }
   if (!_classifier) {
     _classifier = new IntentClassifier();
@@ -231,15 +242,18 @@ export function createHandlers(deps: HandlerDeps) {
         console.log(`[pilav] chat=${chatId} intent=${intent} msg="${text.slice(0, 60)}"`);
 
         if (intent === "code_dev") {
-          if (!_claudeRunner) {
-            await sendReply(chatId, "Claude Code runner not available (no action store).");
-            return;
-          }
           if (_activeSessions.has("_auto")) {
-            await sendReply(chatId, "A Claude Code session is already running. Use /cancel to stop it, or /work <name> <task> to start a parallel named session.");
+            await sendReply(chatId, "A session is already running. Use /cancel to stop it, or /work <name> <task> to start a parallel named session.");
             return;
           }
-          runClaudeSession({ name: "_auto", task: text, chatId, userId, cwd: deps.defaultProjectDir });
+          if (_claudeRunner) {
+            runClaudeSession({ name: "_auto", task: text, chatId, userId, cwd: deps.defaultProjectDir });
+          } else if (_openCodeRunner) {
+            await sendReply(chatId, "Claude Code unavailable — using OpenCode free model instead.");
+            runOpenCodeSession({ name: "_auto", task: text, chatId, cwd: deps.defaultProjectDir });
+          } else {
+            await sendReply(chatId, "No coding agent available (Claude Code and OpenCode both unavailable).");
+          }
           return;
         }
 
@@ -308,6 +322,17 @@ export function createHandlers(deps: HandlerDeps) {
           resumeClaudeSessionId: opts.resumeClaudeSessionId,
         });
 
+        const isSessionLimit = result.status === "error" &&
+          result.errorMessage?.toLowerCase().includes("session limit");
+
+        if (isSessionLimit && _openCodeRunner) {
+          _activeSessions.delete(name);
+          clearInterval(heartbeat);
+          await sendReply(chatId, `${prefix()}Claude Code session limit hit — falling back to OpenCode free model...`);
+          runOpenCodeSession({ name, task, chatId, cwd });
+          return;
+        }
+
         // Store claudeSessionId so /fix-yourself can save it for resume after restart
         if (result.claudeSessionId) {
           const s = _activeSessions.get(name);
@@ -332,7 +357,13 @@ export function createHandlers(deps: HandlerDeps) {
       } catch (err) {
         _activeSessions.delete(name);
         clearInterval(heartbeat);
-        await sendReply(chatId, `${prefix()}Claude Code error: ${(err as Error).message.slice(0, 300)}`);
+        const msg = (err as Error).message.toLowerCase();
+        if (msg.includes("session limit") && _openCodeRunner) {
+          await sendReply(chatId, `${prefix()}Claude Code session limit hit — falling back to OpenCode free model...`);
+          runOpenCodeSession({ name, task, chatId, cwd });
+        } else {
+          await sendReply(chatId, `${prefix()}Claude Code error: ${(err as Error).message.slice(0, 300)}`);
+        }
       }
     })();
   }
@@ -469,7 +500,7 @@ export function createHandlers(deps: HandlerDeps) {
         const response = await opencodeQuickChat(text);
         await replyChunked(chatId, response);
       } catch (fallbackErr) {
-        await sendReply(chatId, `Both LM Studio and OpenCode are unavailable. Error: ${(err as Error).message.slice(0, 150)}`);
+        await sendReply(chatId, `Both LM Studio and OpenCode are unavailable. Error: ${(fallbackErr as Error).message.slice(0, 150)}`);
       }
     }
   }
@@ -1071,19 +1102,49 @@ Work in: ${gatewayDir}`,
     const chatId = msg.chat.id;
     const userId = msg.from?.id ?? chatId;
     if (!isAllowed(userId, allowedUsers)) return;
+
+    // LM Studio status + loaded models
+    let lmStatus = "❌ down";
+    let lmModels = "";
+    try {
+      const r = await fetch("http://localhost:1234/v1/models", { signal: AbortSignal.timeout(3000) });
+      if (r.ok) {
+        const data = await r.json() as { data?: Array<{ id: string }> };
+        const models = data?.data?.map((m) => m.id) ?? [];
+        lmStatus = `✅ up (${models.length} model${models.length !== 1 ? "s" : ""})`;
+        lmModels = models.length > 0 ? "\n" + models.map((m) => `  • ${m}`).join("\n") : "";
+      } else {
+        lmStatus = `❌ ${r.status}`;
+      }
+    } catch { lmStatus = "❌ down (no connection)"; }
+
+    // Runner availability
+    const claudeOk = _claudeRunner !== null;
+    const opencodeOk = _openCodeRunner !== null;
+    const ocVersion = opencodeOk && _openCodeVersion ? ` (${_openCodeVersion})` : "";
+
+    // Active sessions detail
     const activeParts = _activeSessions.size > 0
       ? [..._activeSessions.entries()].map(([n, s]) => {
           const elapsed = Math.round((Date.now() - s.startedAt) / 1000);
           return `• ${n === "_auto" ? "session" : n} — ${elapsed}s`;
         }).join("\n")
       : "none";
-    let lmStatus = "unknown";
+
+    // Pi session
+    let piStatus = "idle";
     try {
-      const r = await fetch("http://localhost:1234/v1/models", { signal: AbortSignal.timeout(2000) });
-      lmStatus = r.ok ? "✅ up" : `❌ ${r.status}`;
-    } catch { lmStatus = "❌ down"; }
+      const session = router.getIfExists(chatId);
+      if (session) piStatus = `active (${session.isAlive ? "alive" : "dead"})`;
+    } catch { piStatus = "error"; }
+
     await sendReply(chatId,
-      `🏓 Pong!\n\nGateway: ✅ running\nLM Studio: ${lmStatus}\nActive sessions: ${_activeSessions.size > 0 ? "\n" + activeParts : "none"}\nUptime: ${Math.round(process.uptime() / 60)}m`
+      `🏓 Pong!\n\n` +
+      `Gateway: ✅ running  (uptime ${Math.round(process.uptime() / 60)}m)\n` +
+      `Pi: ${piStatus}\n` +
+      `LM Studio: ${lmStatus}${lmModels}\n` +
+      `Claude runner: ${claudeOk ? "✅" : "❌"}  OpenCode runner: ${opencodeOk ? "✅" : "❌"}${ocVersion}\n` +
+      `Active sessions: ${activeParts}`
     );
   }
 

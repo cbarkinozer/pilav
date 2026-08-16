@@ -81,8 +81,12 @@ export class PermissionJudge {
       const stripped = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
       // Extract JSON — search stripped first, fall back to raw (JSON might be inside <think>)
-      const jsonMatch = stripped.match(/\{[\s\S]*\}/) ?? raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("No JSON in LLM response");
+      const jsonMatch = stripped.match(/\{(?:[^{}]|(?:\{[^{}]*\}))*\}/)
+        ?? raw.match(/\{(?:[^{}]|(?:\{[^{}]*\}))*\}/);
+      if (!jsonMatch) {
+        console.warn(`[pilav][permission-judge] model returned non-JSON response: "${stripped.slice(0, 200)}"`);
+        throw new Error("No JSON in LLM response");
+      }
 
       const parsed = JSON.parse(jsonMatch[0]) as {
         safe: boolean;
@@ -100,12 +104,11 @@ export class PermissionJudge {
           : "bypassPermissions") as PilotDecision["permissionMode"],
       };
     } catch (err) {
-      // If LM Studio is down or judgment fails, fall back to safe defaults
       console.warn("[pilav][permission-judge] fallback to safe defaults:", (err as Error).message);
       return {
         safe: true,
-        reasoning: "LM Studio unavailable — using safe defaults (bypassPermissions, all tools).",
-        allowedTools: [],  // empty = use Claude Code defaults
+        reasoning: "Permission judge unavailable — using safe defaults (bypassPermissions, all tools).",
+        allowedTools: [],
         permissionMode: "bypassPermissions",
       };
     }

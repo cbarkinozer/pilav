@@ -208,6 +208,7 @@ export async function opencodeQuickChat(
     const proc = spawn("opencode", [
       "run", "--format", "json",
       "--model", model,
+      "--dangerously-skip-permissions",
       fullPrompt,
     ], {
       env: { ...process.env },
